@@ -439,7 +439,13 @@ public class MainActivity extends Activity {
             ticker = new Runnable() {
                 @Override public void run() {
                     invalidate();
-                    handler.postDelayed(this, 1000);
+                    boolean hasNews = false;
+                    if (!pages.isEmpty() && currentPage < pages.size()) {
+                        for (Widget w : pages.get(currentPage)) {
+                            if ("news".equals(w.type)) hasNews = true;
+                        }
+                    }
+                    handler.postDelayed(this, hasNews ? 16 : 1000);
                 }
             };
             load();
@@ -671,20 +677,40 @@ public class MainActivity extends Activity {
 
             float titleSize = Math.max(dp(24), Math.min(r.height() * 0.42f, r.width() / Math.max(3.2f, primary.length() * 0.55f)));
             textPaint.setTextAlign(Paint.Align.LEFT);
-            textPaint.setColor(Color.WHITE);
-            textPaint.setTextSize(titleSize);
-            canvas.drawText(primary, r.left + dp(22), r.centerY() + titleSize * 0.20f, textPaint);
-            textPaint.setTextSize(Math.max(dp(13), titleSize * 0.22f));
-            textPaint.setColor(0xCCFFFFFF);
-            if (secondary != null && secondary.contains("\n")) {
-                String[] lines = secondary.split("\n");
-                float yy = r.top + dp(34);
-                for (String line : lines) {
-                    canvas.drawText(line, r.left + dp(24), yy, textPaint);
-                    yy += textPaint.getTextSize() * 1.5f;
+            
+            if ("calendar".equals(widget.type)) {
+                textPaint.setTextSize(dp(16));
+                textPaint.setColor(0xAAFFFFFF);
+                canvas.drawText(primary, r.left + dp(22), r.top + dp(32), textPaint);
+                
+                textPaint.setTextSize(dp(18));
+                textPaint.setColor(Color.WHITE);
+                if (secondary != null && secondary.contains("\n")) {
+                    String[] lines = secondary.split("\n");
+                    float yy = r.top + dp(62);
+                    for (String line : lines) {
+                        canvas.drawText(line, r.left + dp(22), yy, textPaint);
+                        yy += dp(26);
+                    }
+                } else {
+                    canvas.drawText(secondary, r.left + dp(22), r.top + dp(62), textPaint);
                 }
             } else {
-                canvas.drawText(secondary, r.left + dp(24), r.top + dp(34), textPaint);
+                textPaint.setColor(Color.WHITE);
+                textPaint.setTextSize(titleSize);
+                canvas.drawText(primary, r.left + dp(22), r.centerY() + titleSize * 0.20f, textPaint);
+                textPaint.setTextSize(Math.max(dp(13), titleSize * 0.22f));
+                textPaint.setColor(0xCCFFFFFF);
+                if (secondary != null && secondary.contains("\n")) {
+                    String[] lines = secondary.split("\n");
+                    float yy = r.top + dp(34);
+                    for (String line : lines) {
+                        canvas.drawText(line, r.left + dp(24), yy, textPaint);
+                        yy += textPaint.getTextSize() * 1.5f;
+                    }
+                } else {
+                    canvas.drawText(secondary, r.left + dp(24), r.top + dp(34), textPaint);
+                }
             }
 
             if ("battery".equals(widget.type)) {
