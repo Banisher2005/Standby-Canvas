@@ -1,5 +1,3 @@
-package com.codex.standbycanvas;
-
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
@@ -36,6 +34,13 @@ import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
 import android.os.Build;
+import android.graphics.Bitmap;
+import android.graphics.Matrix;
+import android.net.Uri;
+import android.provider.CalendarContract;
+import android.provider.MediaStore;
+import android.database.Cursor;
+import android.provider.Settings;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -54,6 +59,8 @@ public class MainActivity extends Activity {
     private DashboardView dashboard;
     private LinearLayout toolbar;
     private Widget weatherWidgetPending;
+    private Widget photoWidgetPending;
+    private Widget calendarWidgetPending;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -125,7 +132,7 @@ public class MainActivity extends Activity {
     }
 
     private void showAddDialog() {
-        final String[] types = {"Clock", "Date", "Battery", "Note", "Timer", "Weather"};
+        final String[] types = {"Clock", "Date", "Battery", "Note", "Timer", "Weather", "Music", "Photo", "Calendar"};
         new AlertDialog.Builder(this)
                 .setTitle("Add widget")
                 .setItems(types, new DialogInterface.OnClickListener() {
@@ -162,13 +169,89 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        if (requestCode == 101 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            if (weatherWidgetPending != null) fetchLocationAndWeather(weatherWidgetPending);
-        } else if (requestCode == 101) {
-            if (weatherWidgetPending != null) {
-                weatherWidgetPending.condition = "No permission";
-                if (dashboard != null) dashboard.invalidate();
+        boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (requestCode == 101) {
+            if (granted && weatherWidgetPending != null) fetchLocationAndWeather(weatherWidgetPending);
+            else if (weatherWidgetPending != null) { weatherWidgetPending.condition = "No permission"; if (dashboard != null) dashboard.invalidate(); }
+        } else if (requestCode == 102) {
+            if (granted) launchPhotoPicker();
+        } else if (requestCode == 103) {
+            if (granted && calendarWidgetPending != null) fetchCalendarEvents(calendarWidgetPending);
+            else if (calendarWidgetPending != null) { calendarWidgetPending.condition = "No permission"; if (dashboard != null) dashboard.invalidate(); }
+        }
+    }
+
+    public void setupPhoto(Widget widget) {
+        photoWidgetPending = widget;
+        String permission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ? Manifest.permission.READ_MEDIA_IMAGES : Manifest.permission.READ_EXTERNAL_STORAGE;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{permission}, 102);
+        } else {
+            launchPhotoPicker();
+        }
+    }
+
+    private void launchPhotoPicker() {
+        Intent intent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+        startActivityForResult(intent, 102);
+    }
+
+    public void setupCalendar(Widget widget) {
+        calendarWidgetPending = widget;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.READ_CALENDAR}, 103);
+        } else {
+            fetchCalendarEvents(widget);
+        }
+    }
+
+    private void fetchCalendarEvents(Widget widget) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) return;
+        new Thread(() -> {
+            try {
+                long now = System.currentTimeMillis();
+                Uri uri = CalendarContract.Events.CONTENT_URI;
+                String[] projection = {CalendarContract.Events.TITLE, CalendarContract.Events.DTSTART};
+                String selection = CalendarContract.Events.DTSTART + " >= ?";
+                String[] selectionArgs = {String.valueOf(now)};
+                String sortOrder = CalendarContract.Events.DTSTART + " ASC LIMIT 2";
+                Cursor cursor = getContentResolver().query(uri, projection, selection, selectionArgs, sortOrder);
+                StringBuilder events = new StringBuilder();
+                if (cursor != null) {
+                    java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("MMM d, HH:mm", java.util.Locale.getDefault());
+                    while (cursor.moveToNext()) {
+                        String title = cursor.getString(0);
+                        long start = cursor.getLong(1);
+                        events.append(title).append(" - ").append(sdf.format(new java.util.Date(start))).append("\n");
+                    }
+                    cursor.close();
+                }
+                if (events.length() == 0) events.append("No upcoming events");
+                widget.condition = events.toString().trim();
+                runOnUiThread(() -> { if (dashboard != null) dashboard.invalidate(); });
+            } catch (Exception e) {
+                widget.condition = "Error reading calendar";
+                runOnUiThread(() -> { if (dashboard != null) dashboard.invalidate(); });
             }
+        }).start();
+    }
+
+    public void setupMusic(Widget widget) {
+        String enabledListeners = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+        boolean isEnabled = enabledListeners != null && enabledListeners.contains(getPackageName());
+        if (!isEnabled) {
+            Toast.makeText(this, "Please enable Notification Access for Standby Canvas", Toast.LENGTH_LONG).show();
+            startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 102 && resultCode == RESULT_OK && data != null && photoWidgetPending != null) {
+            photoWidgetPending.photoUri = data.getData().toString();
+            dashboard.save();
+            dashboard.loadPhotoBitmap(photoWidgetPending);
         }
     }
 
@@ -327,6 +410,9 @@ public class MainActivity extends Activity {
             if ("note".equals(type)) { widget.label = "Tap to edit"; widget.w = 0.32f; widget.h = 0.24f; }
             if ("timer".equals(type)) { widget.startedAt = System.currentTimeMillis(); }
             if ("weather".equals(type)) { MainActivity.this.setupWeather(widget); }
+            if ("photo".equals(type)) { MainActivity.this.setupPhoto(widget); }
+            if ("calendar".equals(type)) { MainActivity.this.setupCalendar(widget); }
+            if ("music".equals(type)) { MainActivity.this.setupMusic(widget); }
             widget.x = 0.08f + (widgets.size() % 4) * 0.18f;
             widget.y = 0.18f + (widgets.size() % 3) * 0.20f;
             widgets.add(widget);
@@ -343,6 +429,27 @@ public class MainActivity extends Activity {
             editMode = true;
             save();
             invalidate();
+        }
+
+        public void loadPhotoBitmap(final Widget widget) {
+            if (widget.photoUri == null || widget.photoUri.isEmpty()) return;
+            new Thread(() -> {
+                try {
+                    Uri uri = Uri.parse(widget.photoUri);
+                    Bitmap bitmap = MediaStore.Images.Media.getBitmap(getContentResolver(), uri);
+                    int maxDim = 800;
+                    float scale = Math.min((float) maxDim / bitmap.getWidth(), (float) maxDim / bitmap.getHeight());
+                    if (scale < 1) {
+                        Matrix matrix = new Matrix();
+                        matrix.postScale(scale, scale);
+                        bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+                    }
+                    widget.bitmap = bitmap;
+                    runOnUiThread(() -> invalidate());
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }).start();
         }
 
         @Override
@@ -405,6 +512,40 @@ public class MainActivity extends Activity {
             } else if ("weather".equals(widget.type)) {
                 primary = widget.temp;
                 secondary = widget.condition;
+            } else if ("music".equals(widget.type)) {
+                primary = MusicListenerService.currentTrack;
+                secondary = MusicListenerService.currentArtist;
+            } else if ("calendar".equals(widget.type)) {
+                primary = "Upcoming";
+                secondary = widget.condition; // reused for events
+            } else if ("photo".equals(widget.type)) {
+                primary = "Tap to pick photo";
+                secondary = "";
+            }
+
+            if ("photo".equals(widget.type) && widget.bitmap != null) {
+                canvas.save();
+                android.graphics.Path clipPath = new android.graphics.Path();
+                clipPath.addRoundRect(r, dp(18), dp(18), android.graphics.Path.Direction.CW);
+                canvas.clipPath(clipPath);
+                float scale = Math.max(r.width() / widget.bitmap.getWidth(), r.height() / widget.bitmap.getHeight());
+                Matrix m = new Matrix();
+                m.postScale(scale, scale);
+                m.postTranslate(r.left + (r.width() - widget.bitmap.getWidth() * scale) / 2f,
+                                r.top + (r.height() - widget.bitmap.getHeight() * scale) / 2f);
+                canvas.drawBitmap(widget.bitmap, m, paint);
+                canvas.restore();
+                
+                if (editMode) {
+                    paint.setStyle(Paint.Style.STROKE);
+                    paint.setStrokeWidth(widget == active ? dp(3) : dp(1));
+                    paint.setColor(widget == active ? 0xCCFFFFFF : 0x38FFFFFF);
+                    canvas.drawRoundRect(r, dp(18), dp(18), paint);
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(0xCCFFFFFF);
+                    canvas.drawCircle(r.right - dp(18), r.bottom - dp(18), dp(7), paint);
+                }
+                return;
             }
 
             float titleSize = Math.max(dp(24), Math.min(r.height() * 0.42f, r.width() / Math.max(3.2f, primary.length() * 0.55f)));
@@ -414,7 +555,16 @@ public class MainActivity extends Activity {
             canvas.drawText(primary, r.left + dp(22), r.centerY() + titleSize * 0.20f, textPaint);
             textPaint.setTextSize(Math.max(dp(13), titleSize * 0.22f));
             textPaint.setColor(0xCCFFFFFF);
-            canvas.drawText(secondary, r.left + dp(24), r.top + dp(34), textPaint);
+            if (secondary != null && secondary.contains("\n")) {
+                String[] lines = secondary.split("\n");
+                float yy = r.top + dp(34);
+                for (String line : lines) {
+                    canvas.drawText(line, r.left + dp(24), yy, textPaint);
+                    yy += textPaint.getTextSize() * 1.5f;
+                }
+            } else {
+                canvas.drawText(secondary, r.left + dp(24), r.top + dp(34), textPaint);
+            }
 
             if ("battery".equals(widget.type)) {
                 drawBattery(canvas, r);
@@ -490,6 +640,15 @@ public class MainActivity extends Activity {
         }
 
         private void showWidgetOptions(final Widget widget) {
+            if ("photo".equals(widget.type)) {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Photo widget")
+                        .setItems(new String[]{"Delete widget", "Change photo"}, (dialog, which) -> {
+                            if (which == 0) { widgets.remove(widget); active = null; save(); invalidate(); }
+                            else { MainActivity.this.setupPhoto(widget); }
+                        }).show();
+                return;
+            }
             if ("note".equals(widget.type)) {
                 final EditText input = new EditText(MainActivity.this);
                 input.setSingleLine(false);
@@ -573,6 +732,7 @@ public class MainActivity extends Activity {
                     item.put("h", widget.h);
                     item.put("label", widget.label);
                     item.put("startedAt", widget.startedAt);
+                    item.put("photoUri", widget.photoUri == null ? "" : widget.photoUri);
                     array.put(item);
                 }
                 prefs.edit().putString("widgets", array.toString()).putInt("theme", theme).apply();
@@ -600,7 +760,10 @@ public class MainActivity extends Activity {
                     );
                     widget.label = item.optString("label", "");
                     widget.startedAt = item.optLong("startedAt", System.currentTimeMillis());
+                    widget.photoUri = item.optString("photoUri", "");
                     if ("weather".equals(widget.type)) { MainActivity.this.setupWeather(widget); }
+                    if ("calendar".equals(widget.type)) { MainActivity.this.setupCalendar(widget); }
+                    if ("photo".equals(widget.type)) { loadPhotoBitmap(widget); }
                     widgets.add(widget);
                 }
             } catch (Exception e) {
@@ -629,6 +792,8 @@ public class MainActivity extends Activity {
         long startedAt = System.currentTimeMillis();
         String temp = "--°";
         String condition = "Unknown";
+        String photoUri = "";
+        Bitmap bitmap = null;
 
         Widget(String type, float x, float y, float w, float h) {
             this.type = type;
