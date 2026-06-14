@@ -262,6 +262,7 @@ public class MainActivity extends Activity {
             try {
                 URL url = new URL("https://feeds.bbci.co.uk/news/world/rss.xml");
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
                 conn.setReadTimeout(10000);
                 conn.setConnectTimeout(10000);
                 conn.connect();
@@ -277,16 +278,22 @@ public class MainActivity extends Activity {
                     if (event == XmlPullParser.START_TAG && "title".equals(name)) isTitle = true;
                     else if (event == XmlPullParser.TEXT && isTitle) {
                         String text = myparser.getText();
-                        if (!text.equals("BBC News - World") && !text.equals("BBC News")) headlines.append(text).append("   •   ");
+                        if (!text.equals("BBC News - World") && !text.equals("BBC News") && text.trim().length() > 0) {
+                            headlines.append(text).append("   •   ");
+                        }
                     }
                     else if (event == XmlPullParser.END_TAG && "title".equals(name)) isTitle = false;
                     event = myparser.next();
                 }
                 widget.condition = headlines.toString();
+                if (widget.condition.endsWith("   •   ")) {
+                    widget.condition = widget.condition.substring(0, widget.condition.length() - 7);
+                }
                 widget.tickerOffset = 0;
             } catch (Exception e) {
                 widget.condition = "Error loading news";
             }
+            runOnUiThread(() -> { if (dashboard != null) dashboard.invalidate(); });
         }).start();
     }
 
@@ -666,7 +673,7 @@ public class MainActivity extends Activity {
                     canvas.drawText(secondary, r.left + dp(22), r.top + dp(42) * widget.textScale + dp(20), textPaint);
                 }
             } else if ("music".equals(widget.type)) {
-                float titleSize = Math.max(dp(20), Math.min(r.height() * 0.35f, r.width() / Math.max(4f, primary.length() * 0.5f))) * widget.textScale;
+                float titleSize = Math.max(dp(20), Math.min(dp(42), r.width() / Math.max(4f, primary.length() * 0.5f))) * widget.textScale;
                 textPaint.setTextAlign(Paint.Align.LEFT);
                 textPaint.setColor(Color.WHITE);
                 textPaint.setTextSize(titleSize);
