@@ -859,7 +859,71 @@ public class MainActivity extends Activity {
                 textPaint.setColor(0xCCFFFFFF);
                 canvas.drawText(secondary, textLeft, r.top + dp(38) * widget.textScale + textPaint.getTextSize() * 1.5f, textPaint);
                 
-                float btnY = r.bottom - dp(28);
+                
+                // Playback Position and Waveform Math
+                long duration = 1;
+                long position = 0;
+                boolean isPlaying = false;
+                if (MusicListenerService.sessionToken != null) {
+                    android.media.session.MediaController mc = new android.media.session.MediaController(getContext(), MusicListenerService.sessionToken);
+                    android.media.MediaMetadata meta = mc.getMetadata();
+                    if (meta != null && meta.containsKey(android.media.MediaMetadata.METADATA_KEY_DURATION)) {
+                        duration = meta.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION);
+                    }
+                    android.media.session.PlaybackState pb = mc.getPlaybackState();
+                    if (pb != null) {
+                        position = pb.getPosition();
+                        if (pb.getState() == android.media.session.PlaybackState.STATE_PLAYING) {
+                            isPlaying = true;
+                            long timeDelta = android.os.SystemClock.elapsedRealtime() - pb.getLastPositionUpdateTime();
+                            position += (long) (timeDelta * pb.getPlaybackSpeed());
+                        }
+                    }
+                }
+                if (duration <= 0) duration = 1;
+                if (position > duration) position = duration;
+                if (position < 0) position = 0;
+                
+                float progress = (float) ((double) position / duration);
+                
+                float waveStartX = r.left + dp(24);
+                float waveEndX = r.right - dp(24);
+                float currentX = waveStartX + (waveEndX - waveStartX) * progress;
+                float barY = r.bottom - dp(56);
+                
+                // Unplayed track line
+                paint.setColor(0x44FFFFFF);
+                paint.setStrokeWidth(dp(2));
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawLine(currentX, barY, waveEndX, barY, paint);
+                
+                // Played track wave
+                paint.setColor(0xEEFFFFFF);
+                if (currentX > waveStartX) {
+                    Path wave = new Path();
+                    wave.moveTo(waveStartX, barY);
+                    
+                    if (isPlaying) {
+                        float wavePhase = (float) (System.currentTimeMillis() % 2000) / 2000f * (float)Math.PI * 2f;
+                        for (float x = waveStartX; x <= currentX; x += dp(2)) {
+                            float dx = x - waveStartX;
+                            float totalPlay = currentX - waveStartX;
+                            float env = (float) Math.sin((dx / totalPlay) * Math.PI);
+                            float amp = dp(5) * env;
+                            float y = barY + amp * (float) Math.sin((dx / dp(15)) - wavePhase * 4f);
+                            wave.lineTo(x, y);
+                        }
+                        canvas.drawPath(wave, paint);
+                    } else {
+                        canvas.drawLine(waveStartX, barY, currentX, barY, paint);
+                    }
+                    
+                    paint.setStyle(Paint.Style.FILL);
+                    canvas.drawCircle(currentX, barY, dp(4), paint);
+                }
+
+                float btnY = r.bottom - dp(24);
+                paint.setStyle(Paint.Style.FILL);
                 paint.setColor(0xEEFFFFFF);
                 
                 // Prev
@@ -873,8 +937,17 @@ public class MainActivity extends Activity {
                 if (MusicListenerService.sessionToken != null) {
                     canvas.drawCircle(r.centerX(), btnY, dp(16), paint);
                     paint.setColor(0xFF121212);
-                    canvas.drawRect(r.centerX() - dp(4), btnY - dp(5), r.centerX() - dp(1), btnY + dp(5), paint);
-                    canvas.drawRect(r.centerX() + dp(1), btnY - dp(5), r.centerX() + dp(4), btnY + dp(5), paint);
+                    if (isPlaying) {
+                        canvas.drawRect(r.centerX() - dp(4), btnY - dp(5), r.centerX() - dp(1), btnY + dp(5), paint);
+                        canvas.drawRect(r.centerX() + dp(1), btnY - dp(5), r.centerX() + dp(4), btnY + dp(5), paint);
+                    } else {
+                        Path play = new Path();
+                        play.moveTo(r.centerX() - dp(3), btnY - dp(6));
+                        play.lineTo(r.centerX() + dp(5), btnY);
+                        play.lineTo(r.centerX() - dp(3), btnY + dp(6));
+                        play.close();
+                        canvas.drawPath(play, paint);
+                    }
                 }
                 
                 // Next
