@@ -72,7 +72,7 @@ import android.content.SharedPreferences;
 
 public class MainActivity extends Activity {
     private DashboardView dashboard;
-    private LinearLayout toolbar;
+    private android.widget.TextView settingsGear;
     private Widget weatherWidgetPending;
     private Widget photoWidgetPending;
     private Widget calendarWidgetPending;
@@ -109,34 +109,20 @@ public class MainActivity extends Activity {
         dashboard = new DashboardView(this);
         root.addView(dashboard, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(14, 10, 14, 10);
-        toolbar.setBackgroundColor(0x77000000);
-        toolbar.addView(makeButton("Edit", new View.OnClickListener() {
-            @Override public void onClick(View v) { toggleEdit(); }
-        }));
-        toolbar.addView(makeButton("Add", new View.OnClickListener() {
-            @Override public void onClick(View v) { showAddDialog(); }
-        }));
-        toolbar.addView(makeButton("Theme", new View.OnClickListener() {
-            @Override public void onClick(View v) { dashboard.nextTheme(); }
-        }));
-        toolbar.addView(makeButton("Background", new View.OnClickListener() {
-            @Override public void onClick(View v) { showBackgroundSettings(); }
-        }));
-        toolbar.addView(makeButton("Reset", new View.OnClickListener() {
-            @Override public void onClick(View v) { confirmReset(); }
-        }));
-
-        FrameLayout.LayoutParams barParams = new FrameLayout.LayoutParams(
+        settingsGear = new android.widget.TextView(this);
+        settingsGear.setText("⚙️");
+        settingsGear.setTextSize(28);
+        settingsGear.setPadding(dp(16), dp(16), dp(16), dp(16));
+        settingsGear.setOnClickListener(v -> showUnifiedSettingsDialog());
+        
+        FrameLayout.LayoutParams gearParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP | Gravity.CENTER_HORIZONTAL
+                Gravity.TOP | Gravity.END
         );
-        barParams.topMargin = 16;
-        root.addView(toolbar, barParams);
+        gearParams.topMargin = dp(16);
+        gearParams.rightMargin = dp(16);
+        root.addView(settingsGear, gearParams);
         setContentView(root);
         enterImmersive();
     }
@@ -147,26 +133,51 @@ public class MainActivity extends Activity {
         enterImmersive();
     }
 
-    private Button makeButton(String label, View.OnClickListener listener) {
+    private void showUnifiedSettingsDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(20), dp(20), dp(20));
+        
+        layout.addView(makeSettingsButton("Toggle Edit Mode", v -> toggleEdit()));
+        layout.addView(makeSettingsButton("Add Widget", v -> showAddDialog()));
+        layout.addView(makeSettingsButton("Background Settings", v -> showBackgroundSettings()));
+        layout.addView(makeSettingsButton("Cycle Fallback Theme", v -> dashboard.nextTheme()));
+        
+        String currentGlass = globalPrefs.getString("glass_theme", "dark");
+        Button glassBtn = makeSettingsButton("Glass Style: " + (currentGlass.equals("dark") ? "Dark" : "Light"), null);
+        glassBtn.setOnClickListener(v -> {
+            String newGlass = globalPrefs.getString("glass_theme", "dark").equals("dark") ? "light" : "dark";
+            globalPrefs.edit().putString("glass_theme", newGlass).apply();
+            glassBtn.setText("Glass Style: " + (newGlass.equals("dark") ? "Dark" : "Light"));
+            if (dashboard != null) dashboard.invalidate();
+        });
+        layout.addView(glassBtn);
+        
+        layout.addView(makeSettingsButton("Reset Dashboard", v -> confirmReset()));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Dashboard Settings")
+                .setView(layout)
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private Button makeSettingsButton(String label, View.OnClickListener listener) {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
-        button.setTextColor(Color.WHITE);
-        button.setBackgroundColor(0x55242A2E);
         button.setOnClickListener(listener);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(88), dp(42));
-        params.leftMargin = dp(4);
-        params.rightMargin = dp(4);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = dp(8);
         button.setLayoutParams(params);
         return button;
     }
 
     private void toggleEdit() {
         dashboard.setEditMode(!dashboard.isEditMode());
-        toolbar.setAlpha(dashboard.isEditMode() ? 1f : 0.42f);
+        settingsGear.setAlpha(dashboard.isEditMode() ? 1f : 0.42f);
         Toast.makeText(this, dashboard.isEditMode() ? "Edit mode: drag, resize, tap widget to configure" : "Locked dashboard", Toast.LENGTH_SHORT).show();
     }
-
     private void showAddDialog() {
         final String[] types = {"Clock", "Date", "Battery", "Note", "Timer", "Weather", "Music", "Photo", "Calendar", "News"};
         new AlertDialog.Builder(this)
@@ -728,12 +739,33 @@ public class MainActivity extends Activity {
 
         private void drawWidget(Canvas canvas, Widget widget) {
             RectF r = rect(widget);
-            paint.setColor(widget == active && editMode ? 0x77000000 : 0x55000000);
-            canvas.drawRoundRect(r, dp(24), dp(24), paint);
+            boolean isDark = "dark".equals(globalPrefs.getString("glass_theme", "dark"));
+            
+            // Drop Shadow
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(isDark ? 0xFF000000 : 0xFF000000);
+            paint.setShadowLayer(dp(20), 0, dp(10), 0x77000000);
+            canvas.drawRoundRect(r, dp(32), dp(32), paint);
+            paint.clearShadowLayer();
+
+            // Glass Fill
+            int fillStart = isDark ? 0x66000000 : 0xBBFFFFFF;
+            int fillEnd = isDark ? 0x22000000 : 0x77FFFFFF;
+            if (widget == active && editMode) {
+                fillStart = isDark ? 0x99000000 : 0xFFFFFFFF;
+            }
+            paint.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, fillStart, fillEnd, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(r, dp(32), dp(32), paint);
+            paint.setShader(null);
+
+            // Specular Border
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(widget == active && editMode ? dp(2) : dp(1));
-            paint.setColor(widget == active && editMode ? 0x88FFFFFF : 0x2AFFFFFF);
-            canvas.drawRoundRect(r, dp(24), dp(24), paint);
+            int strokeStart = isDark ? 0x88FFFFFF : 0xFFFFFFFF;
+            int strokeEnd = isDark ? 0x05FFFFFF : 0x44FFFFFF;
+            paint.setShader(new LinearGradient(r.left, r.top, r.right, r.bottom, strokeStart, strokeEnd, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(r, dp(32), dp(32), paint);
+            paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
 
             String primary = "";
@@ -753,19 +785,21 @@ public class MainActivity extends Activity {
             if ("photo".equals(widget.type) && widget.bitmap != null) {
                 canvas.save();
                 Path clipPath = new Path();
-                clipPath.addRoundRect(r, dp(24), dp(24), Path.Direction.CW);
+                clipPath.addRoundRect(r, dp(32), dp(32), Path.Direction.CW);
                 canvas.clipPath(clipPath);
-                float scale = Math.max(r.width() / widget.bitmap.getWidth(), r.height() / widget.bitmap.getHeight());
-                Matrix m = new Matrix();
-                m.postScale(scale, scale);
-                m.postTranslate(r.left + (r.width() - widget.bitmap.getWidth() * scale) / 2f, r.top + (r.height() - widget.bitmap.getHeight() * scale) / 2f);
-                canvas.drawBitmap(widget.bitmap, m, paint);
+                canvas.drawBitmap(Bitmap.createScaledBitmap(widget.bitmap, (int)r.width(), (int)r.height(), true), r.left, r.top, paint);
                 canvas.restore();
-            } else if ("news".equals(widget.type)) {
-                textPaint.setColor(Color.WHITE);
+            }
+
+            int textColor = isDark ? Color.WHITE : 0xFF111111;
+            int secTextColor = isDark ? 0xCCFFFFFF : 0xAA111111;
+            textPaint.setColor(textColor);
+            textPaint.setShadowLayer(dp(4), 0, dp(2), isDark ? 0x88000000 : 0x33FFFFFF);
+
+            if ("news".equals(widget.type)) {
                 textPaint.setTextAlign(Paint.Align.LEFT);
                 textPaint.setTextSize(dp(22) * widget.textScale);
-                canvas.drawText(primary, r.left + dp(22), r.top + dp(32) * widget.textScale, textPaint);
+                canvas.drawText(primary, r.left + dp(24), r.top + dp(38) * widget.textScale, textPaint);
                 
                 if (widget.layoutStyle == 0) { // Ticker
                     widget.tickerOffset -= 1.5f;
@@ -774,19 +808,21 @@ public class MainActivity extends Activity {
                     canvas.save();
                     canvas.clipRect(r.left + dp(10), r.top + dp(34), r.right - dp(10), r.bottom - dp(10));
                     textPaint.setTextSize(dp(18) * widget.textScale);
+                    textPaint.setColor(secTextColor);
                     canvas.drawText(secondary, r.left + dp(24) + widget.tickerOffset, r.top + dp(40) + textPaint.getTextSize(), textPaint);
                     canvas.restore();
                 } else { // List
-                    textPaint.setTextSize(dp(16) * widget.textScale);
-                    textPaint.setColor(0xEEFFFFFF);
-                    String[] news = secondary.split("   •   ");
-                    float yy = r.top + dp(48) * widget.textScale + dp(14);
                     canvas.save();
-                    canvas.clipRect(r.left + dp(10), r.top + dp(34), r.right - dp(10), r.bottom - dp(10));
-                    for (String item : news) {
-                        if (item.trim().length() > 0) {
-                            canvas.drawText("• " + item, r.left + dp(20), yy, textPaint);
-                            yy += textPaint.getTextSize() * 1.5f;
+                    canvas.clipRect(r.left + dp(10), r.top + dp(45) * widget.textScale, r.right - dp(10), r.bottom - dp(10));
+                    textPaint.setTextSize(dp(16) * widget.textScale);
+                    textPaint.setColor(secTextColor);
+                    String[] evs = secondary.split("   •   ");
+                    float yy = r.top + dp(45) * widget.textScale + dp(20);
+                    for (String ev : evs) {
+                        if (ev.trim().length() > 0) {
+                            canvas.drawCircle(r.left + dp(26), yy - dp(6) * widget.textScale, dp(3) * widget.textScale, textPaint);
+                            canvas.drawText(ev, r.left + dp(38), yy, textPaint);
+                            yy += dp(26) * widget.textScale;
                         }
                     }
                     canvas.restore();
@@ -794,10 +830,10 @@ public class MainActivity extends Activity {
             } else if ("calendar".equals(widget.type)) {
                 textPaint.setTextAlign(Paint.Align.LEFT);
                 textPaint.setTextSize(dp(16) * widget.textScale);
-                textPaint.setColor(0xAAFFFFFF);
+                textPaint.setColor(secTextColor);
                 canvas.drawText(primary, r.left + dp(22), r.top + dp(32) * widget.textScale, textPaint);
                 textPaint.setTextSize(dp(18) * widget.textScale);
-                textPaint.setColor(Color.WHITE);
+                textPaint.setColor(textColor);
                 if (secondary != null && secondary.contains("\n")) {
                     String[] evs = secondary.split("\n");
                     float yy = r.top + dp(42) * widget.textScale + dp(20);
@@ -825,7 +861,7 @@ public class MainActivity extends Activity {
             } else if ("music".equals(widget.type)) {
                 float titleSize = Math.max(dp(20), Math.min(dp(42), r.width() / Math.max(4f, primary.length() * 0.5f))) * widget.textScale;
                 textPaint.setTextAlign(Paint.Align.LEFT);
-                textPaint.setColor(Color.WHITE);
+                textPaint.setColor(textColor);
                 textPaint.setTextSize(titleSize);
                 
                 float textLeft = r.left + dp(22);
@@ -856,9 +892,8 @@ public class MainActivity extends Activity {
                     widget.tickerOffset = 0;
                 }
                 textPaint.setTextSize(Math.max(dp(12), titleSize * 0.5f));
-                textPaint.setColor(0xCCFFFFFF);
+                textPaint.setColor(secTextColor);
                 canvas.drawText(secondary, textLeft, r.top + dp(38) * widget.textScale + textPaint.getTextSize() * 1.5f, textPaint);
-                
                 
                 // Playback Position and Waveform Math
                 long duration = 1;
@@ -892,13 +927,13 @@ public class MainActivity extends Activity {
                 float barY = r.bottom - dp(56);
                 
                 // Unplayed track line
-                paint.setColor(0x44FFFFFF);
+                paint.setColor(isDark ? 0x44FFFFFF : 0x44000000);
                 paint.setStrokeWidth(dp(2));
                 paint.setStyle(Paint.Style.STROKE);
                 canvas.drawLine(currentX, barY, waveEndX, barY, paint);
                 
                 // Played track wave
-                paint.setColor(0xEEFFFFFF);
+                paint.setColor(textColor);
                 if (currentX > waveStartX) {
                     Path wave = new Path();
                     wave.moveTo(waveStartX, barY);
@@ -924,7 +959,7 @@ public class MainActivity extends Activity {
 
                 float btnY = r.bottom - dp(24);
                 paint.setStyle(Paint.Style.FILL);
-                paint.setColor(0xEEFFFFFF);
+                paint.setColor(textColor);
                 
                 // Prev
                 Path prev = new Path();
@@ -936,7 +971,7 @@ public class MainActivity extends Activity {
                 // Play/Pause
                 if (MusicListenerService.sessionToken != null) {
                     canvas.drawCircle(r.centerX(), btnY, dp(16), paint);
-                    paint.setColor(0xFF121212);
+                    paint.setColor(isDark ? 0xFF121212 : 0xFFE0E0E0);
                     if (isPlaying) {
                         canvas.drawRect(r.centerX() - dp(4), btnY - dp(5), r.centerX() - dp(1), btnY + dp(5), paint);
                         canvas.drawRect(r.centerX() + dp(1), btnY - dp(5), r.centerX() + dp(4), btnY + dp(5), paint);
@@ -951,7 +986,7 @@ public class MainActivity extends Activity {
                 }
                 
                 // Next
-                paint.setColor(0xEEFFFFFF);
+                paint.setColor(textColor);
                 Path next = new Path();
                 float nx = r.centerX() + dp(40);
                 next.moveTo(nx - dp(6), btnY - dp(6)); next.lineTo(nx + dp(4), btnY); next.lineTo(nx - dp(6), btnY + dp(6)); next.close();
@@ -961,21 +996,26 @@ public class MainActivity extends Activity {
                 if ("photo".equals(widget.type)) {
                     textPaint.setTextAlign(Paint.Align.CENTER);
                     textPaint.setTextSize(dp(18) * widget.textScale);
-                    textPaint.setColor(Color.WHITE);
+                    textPaint.setColor(textColor);
                     canvas.drawText(primary, r.centerX(), r.centerY(), textPaint);
                 } else {
                     float titleSize = Math.max(dp(24), Math.min(r.height() * 0.42f, r.width() / Math.max(3.2f, primary.length() * 0.55f))) * widget.textScale;
                     textPaint.setTextAlign(Paint.Align.LEFT);
-                    textPaint.setColor(Color.WHITE);
+                    textPaint.setColor(textColor);
                     textPaint.setTextSize(titleSize);
                     
                     if ("clock".equals(widget.type)) {
+                        textPaint.setTextAlign(Paint.Align.CENTER);
                         textPaint.setTextSize(titleSize * 1.3f);
-                        canvas.drawText(primary, r.left + dp(24), r.centerY() + titleSize * 0.4f, textPaint);
+                        canvas.drawText(primary, r.centerX(), r.centerY() + titleSize * 0.2f, textPaint);
+                    } else if ("note".equals(widget.type)) {
+                        textPaint.setTextAlign(Paint.Align.CENTER);
+                        textPaint.setTextSize(titleSize);
+                        canvas.drawText(primary, r.centerX(), r.centerY() + titleSize * 0.3f, textPaint);
                     } else {
                         canvas.drawText(primary, r.left + dp(22), r.centerY() + titleSize * 0.20f, textPaint);
                         textPaint.setTextSize(Math.max(dp(13), titleSize * 0.22f));
-                        textPaint.setColor(0xCCFFFFFF);
+                        textPaint.setColor(secTextColor);
                         if (secondary != null && secondary.contains("\n")) {
                             String[] lines = secondary.split("\n");
                             float yy = r.top + dp(34);
@@ -989,8 +1029,8 @@ public class MainActivity extends Activity {
                     }
                 }
             }
-
-            if ("battery".equals(widget.type)) drawBattery(canvas, r);
+            textPaint.clearShadowLayer();
+            if ("battery".equals(widget.type)) drawBattery(canvas, r, isDark);
 
             if (editMode && widget == active) {
                 paint.setColor(0xCCFFFFFF);
@@ -998,14 +1038,14 @@ public class MainActivity extends Activity {
             }
         }
 
-        private void drawBattery(Canvas canvas, RectF r) {
+        private void drawBattery(Canvas canvas, RectF r, boolean isDark) {
             float left = r.left + dp(24);
             float top = r.bottom - dp(42);
             float width = Math.min(r.width() - dp(60), dp(190));
             RectF body = new RectF(left, top, left + width, top + dp(18));
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(dp(2));
-            paint.setColor(0xDDFFFFFF);
+            paint.setColor(isDark ? 0xDDFFFFFF : 0xAA111111);
             canvas.drawRoundRect(body, dp(5), dp(5), paint);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(charging ? 0xFF8ED7C6 : 0xFFFFC857);
