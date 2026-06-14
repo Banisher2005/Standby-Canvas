@@ -43,8 +43,9 @@ New-Item -ItemType Directory -Force -Path $out, $classes, $dex, $generated | Out
 Remove-Item -Force -ErrorAction SilentlyContinue $compiled, $unsigned, $aligned, $packed, $apk, (Join-Path $out "with-classes.apk")
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $classes "*"), (Join-Path $dex "*"), (Join-Path $generated "*")
 
+$assets = Join-Path $root "assets"
 Run-Checked $aapt2 @("compile", "--dir", $res, "-o", $compiled)
-Run-Checked $aapt2 @("link", "-o", $unsigned, "-I", $platform, "--manifest", $manifest, "--java", $generated, "--min-sdk-version", "23", "--target-sdk-version", "35", $compiled)
+Run-Checked $aapt2 @("link", "-o", $unsigned, "-I", $platform, "--manifest", $manifest, "--java", $generated, "-A", $assets, "--min-sdk-version", "23", "--target-sdk-version", "35", $compiled)
 
 $sources = Get-ChildItem $javaSrc -Recurse -Filter *.java | ForEach-Object FullName
 $javacArgs = @("-encoding", "UTF-8", "-source", "8", "-target", "8", "-classpath", $platform, "-d", $classes) + $sources

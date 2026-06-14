@@ -43,8 +43,15 @@ import android.provider.CalendarContract;
 import android.provider.MediaStore;
 import android.database.Cursor;
 import android.provider.Settings;
+import android.media.session.MediaController;
+import android.media.session.PlaybackState;
+import android.graphics.Typeface;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserFactory;
+import java.io.InputStream;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -63,6 +70,7 @@ public class MainActivity extends Activity {
     private Widget weatherWidgetPending;
     private Widget photoWidgetPending;
     private Widget calendarWidgetPending;
+    private Typeface customFont;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -70,6 +78,8 @@ public class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
+        try { customFont = Typeface.createFromAsset(getAssets(), "fonts/Inter-Regular.ttf"); } catch (Exception e) {}
 
         FrameLayout root = new FrameLayout(this);
         dashboard = new DashboardView(this);
@@ -134,7 +144,7 @@ public class MainActivity extends Activity {
     }
 
     private void showAddDialog() {
-        final String[] types = {"Clock", "Date", "Battery", "Note", "Timer", "Weather", "Music", "Photo", "Calendar"};
+        final String[] types = {"Clock", "Date", "Battery", "Note", "Timer", "Weather", "Music", "Photo", "Calendar", "News"};
         new AlertDialog.Builder(this)
                 .setTitle("Add widget")
                 .setItems(types, new DialogInterface.OnClickListener() {
@@ -247,6 +257,39 @@ public class MainActivity extends Activity {
         }
     }
 
+    public void setupNews(Widget widget) {
+        new Thread(() -> {
+            try {
+                URL url = new URL("https://feeds.bbci.co.uk/news/world/rss.xml");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setReadTimeout(10000);
+                conn.setConnectTimeout(10000);
+                conn.connect();
+                InputStream stream = conn.getInputStream();
+                XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
+                XmlPullParser myparser = factory.newPullParser();
+                myparser.setInput(stream, null);
+                int event = myparser.getEventType();
+                StringBuilder headlines = new StringBuilder();
+                boolean isTitle = false;
+                while (event != XmlPullParser.END_DOCUMENT) {
+                    String name = myparser.getName();
+                    if (event == XmlPullParser.START_TAG && "title".equals(name)) isTitle = true;
+                    else if (event == XmlPullParser.TEXT && isTitle) {
+                        String text = myparser.getText();
+                        if (!text.equals("BBC News - World") && !text.equals("BBC News")) headlines.append(text).append("   •   ");
+                    }
+                    else if (event == XmlPullParser.END_TAG && "title".equals(name)) isTitle = false;
+                    event = myparser.next();
+                }
+                widget.condition = headlines.toString();
+                widget.tickerOffset = 0;
+            } catch (Exception e) {
+                widget.condition = "Error loading news";
+            }
+        }).start();
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -348,9 +391,16 @@ public class MainActivity extends Activity {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Handler handler = new Handler(Looper.getMainLooper());
-        private final List<Widget> widgets = new ArrayList<>();
+        private final List<List<Widget>> pages = new ArrayList<>();
+        private int currentPage = 0;
         private final SimpleDateFormat clockFormat = new SimpleDateFormat("HH:mm", Locale.getDefault());
         private final SimpleDateFormat dateFormat = new SimpleDateFormat("EEEE, MMM d", Locale.getDefault());
+
+        private List<Widget> getWidgets() {
+            if (pages.isEmpty()) pages.add(new ArrayList<>());
+            return pages.get(currentPage);
+        }
+
         private final SharedPreferences prefs;
         private final Runnable ticker;
         private int theme = 0;
@@ -380,7 +430,12 @@ public class MainActivity extends Activity {
             setFocusable(true);
             prefs = context.getSharedPreferences("standby_canvas", MODE_PRIVATE);
             textPaint.setColor(Color.WHITE);
-            textPaint.setTypeface(android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL));
+            if (customFont != null) {
+                textPaint.setTypeface(customFont);
+                paint.setTypeface(customFont);
+            } else {
+                textPaint.setTypeface(android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL));
+            }
             ticker = new Runnable() {
                 @Override public void run() {
                     invalidate();
@@ -415,9 +470,10 @@ public class MainActivity extends Activity {
             if ("photo".equals(type)) { MainActivity.this.setupPhoto(widget); }
             if ("calendar".equals(type)) { MainActivity.this.setupCalendar(widget); }
             if ("music".equals(type)) { MainActivity.this.setupMusic(widget); }
-            widget.x = 0.08f + (widgets.size() % 4) * 0.18f;
-            widget.y = 0.18f + (widgets.size() % 3) * 0.20f;
-            widgets.add(widget);
+            if ("news".equals(type)) { widget.w = 0.5f; MainActivity.this.setupNews(widget); }
+            widget.x = 0.08f + (getWidgets().size() % 4) * 0.18f;
+            widget.y = 0.18f + (getWidgets().size() % 3) * 0.20f;
+            getWidgets().add(widget);
             active = widget;
             editMode = true;
             save();
@@ -425,7 +481,7 @@ public class MainActivity extends Activity {
         }
 
         public void reset() {
-            widgets.clear();
+            pages.clear();
             addDefaults();
             theme = 0;
             editMode = true;
@@ -458,12 +514,22 @@ public class MainActivity extends Activity {
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             drawBackground(canvas);
-            for (Widget widget : widgets) {
+            for (Widget widget : getWidgets()) {
                 drawWidget(canvas, widget);
             }
             if (editMode) {
                 drawEditHint(canvas);
             }
+        }
+
+        private int getDominantColor(Bitmap bitmap) {
+            if (bitmap == null) return 0;
+            try {
+                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, 1, 1, true);
+                int color = scaled.getPixel(0, 0);
+                scaled.recycle();
+                return color;
+            } catch (Exception e) { return 0; }
         }
 
         private void drawBackground(Canvas canvas) {
@@ -480,6 +546,32 @@ public class MainActivity extends Activity {
             paint.setColor(p[2] & 0x22FFFFFF);
             canvas.drawCircle(getWidth() * 0.78f, getHeight() * 0.28f, Math.min(getWidth(), getHeight()) * 0.28f, paint);
             canvas.drawCircle(getWidth() * 0.18f, getHeight() * 0.78f, Math.min(getWidth(), getHeight()) * 0.20f, paint);
+            // Material You Dynamic Blend
+            int targetColor = 0;
+            if (MusicListenerService.albumArt != null) targetColor = getDominantColor(MusicListenerService.albumArt);
+            else if (!pages.isEmpty()) {
+                for (Widget w : pages.get(currentPage)) {
+                    if ("photo".equals(w.type) && w.bitmap != null) {
+                        targetColor = getDominantColor(w.bitmap); break;
+                    }
+                }
+            }
+            if (targetColor != 0) {
+                paint.setColor(targetColor);
+                paint.setAlpha(60);
+                canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+                paint.setAlpha(255);
+            }
+            
+            // Draw page indicators
+            paint.setColor(0x55FFFFFF);
+            float indW = dp(16);
+            float startX = (getWidth() - (pages.size() * indW)) / 2f;
+            for (int i=0; i<pages.size(); i++) {
+                paint.setAlpha(i == currentPage ? 255 : 85);
+                canvas.drawCircle(startX + (i * indW) + dp(4), getHeight() - dp(16), dp(3), paint);
+            }
+            paint.setAlpha(255);
         }
 
         private void drawWidget(Canvas canvas, Widget widget) {
@@ -517,12 +609,39 @@ public class MainActivity extends Activity {
             } else if ("music".equals(widget.type)) {
                 primary = MusicListenerService.currentTrack;
                 secondary = MusicListenerService.currentArtist;
+                
+                float btnY = r.bottom - dp(28);
+                paint.setColor(0xCCFFFFFF);
+                canvas.drawCircle(r.centerX(), btnY, dp(14), paint);
+                canvas.drawCircle(r.centerX() - dp(40), btnY, dp(10), paint);
+                canvas.drawCircle(r.centerX() + dp(40), btnY, dp(10), paint);
+                
+                textPaint.setTextSize(dp(10));
+                textPaint.setTextAlign(Paint.Align.CENTER);
+                canvas.drawText("||", r.centerX(), btnY + dp(3), textPaint);
+                canvas.drawText("<", r.centerX() - dp(40), btnY + dp(3), textPaint);
+                canvas.drawText(">", r.centerX() + dp(40), btnY + dp(3), textPaint);
+                textPaint.setTextAlign(Paint.Align.LEFT);
             } else if ("calendar".equals(widget.type)) {
                 primary = "Upcoming";
                 secondary = widget.condition; // reused for events
             } else if ("photo".equals(widget.type)) {
                 primary = "Tap to pick photo";
                 secondary = "";
+            } else if ("news".equals(widget.type)) {
+                primary = "Headlines";
+                secondary = widget.condition;
+                widget.tickerOffset -= 1.5f;
+                float textWidth = textPaint.measureText(secondary);
+                if (widget.tickerOffset < -textWidth) widget.tickerOffset = r.width();
+                
+                canvas.save();
+                canvas.clipRect(r.left + dp(10), r.top + dp(34), r.right - dp(10), r.bottom - dp(10));
+                canvas.drawText(secondary, r.left + dp(24) + widget.tickerOffset, r.top + dp(34) + textPaint.getTextSize(), textPaint);
+                canvas.restore();
+                
+                canvas.drawText(primary, r.left + dp(22), r.top + dp(24), textPaint);
+                return;
             }
 
             if ("photo".equals(widget.type) && widget.bitmap != null) {
@@ -632,7 +751,32 @@ public class MainActivity extends Activity {
                     }
                     return true;
                 case MotionEvent.ACTION_UP:
-                    if (active != null && Math.abs(x - startX) < dp(4) && Math.abs(y - startY) < dp(4)) {
+                    float dx = x - startX;
+                    float dy = y - startY;
+                    if (!isDragging() && Math.abs(dx) > dp(80) && Math.abs(dy) < dp(60)) {
+                        if (dx < 0 && currentPage < pages.size() - 1) currentPage++;
+                        else if (dx > 0 && currentPage > 0) currentPage--;
+                        else if (dx < 0 && currentPage == pages.size() - 1) {
+                            pages.add(new ArrayList<>());
+                            currentPage++;
+                        }
+                        invalidate();
+                        return true;
+                    }
+                    if (active != null && "music".equals(active.type) && y > rect(active).bottom - dp(48) && Math.abs(dx) < dp(10)) {
+                        if (MusicListenerService.sessionToken != null) {
+                            MediaController mc = new MediaController(getContext(), MusicListenerService.sessionToken);
+                            if (x < rect(active).centerX() - dp(20)) mc.getTransportControls().skipToPrevious();
+                            else if (x > rect(active).centerX() + dp(20)) mc.getTransportControls().skipToNext();
+                            else {
+                                PlaybackState pb = mc.getPlaybackState();
+                                if (pb != null && pb.getState() == PlaybackState.STATE_PLAYING) mc.getTransportControls().pause();
+                                else mc.getTransportControls().play();
+                            }
+                        }
+                        active = null; touchMode = 0; return true;
+                    }
+                    if (active != null && Math.abs(dx) < dp(4) && Math.abs(dy) < dp(4)) {
                         showWidgetOptions(active);
                     }
                     touchMode = 0;
@@ -641,12 +785,16 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        private boolean isDragging() {
+            return touchMode != 0 && (Math.abs(lastX - startX) > dp(4) || Math.abs(lastY - startY) > dp(4));
+        }
+
         private void showWidgetOptions(final Widget widget) {
             if ("photo".equals(widget.type)) {
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle("Photo widget")
                         .setItems(new String[]{"Delete widget", "Change photo"}, (dialog, which) -> {
-                            if (which == 0) { widgets.remove(widget); active = null; save(); invalidate(); }
+                            if (which == 0) { getWidgets().remove(widget); active = null; save(); invalidate(); }
                             else { MainActivity.this.setupPhoto(widget); }
                         }).show();
                 return;
@@ -662,7 +810,7 @@ public class MainActivity extends Activity {
                         .setView(input)
                         .setNegativeButton("Delete", new DialogInterface.OnClickListener() {
                             @Override public void onClick(DialogInterface dialog, int which) {
-                                widgets.remove(widget);
+                                getWidgets().remove(widget);
                                 active = null;
                                 save();
                                 invalidate();
@@ -682,7 +830,7 @@ public class MainActivity extends Activity {
                         .setItems(new String[]{"Delete widget", "Restart timer"}, new DialogInterface.OnClickListener() {
                             @Override public void onClick(DialogInterface dialog, int which) {
                                 if (which == 0) {
-                                    widgets.remove(widget);
+                                    getWidgets().remove(widget);
                                     active = null;
                                 } else if ("timer".equals(widget.type)) {
                                     widget.startedAt = System.currentTimeMillis();
@@ -696,8 +844,8 @@ public class MainActivity extends Activity {
         }
 
         private Widget hit(float px, float py) {
-            for (int i = widgets.size() - 1; i >= 0; i--) {
-                Widget widget = widgets.get(i);
+            for (int i = getWidgets().size() - 1; i >= 0; i--) {
+                Widget widget = getWidgets().get(i);
                 if (rect(widget).contains(px, py)) return widget;
             }
             return null;
@@ -714,62 +862,76 @@ public class MainActivity extends Activity {
         }
 
         private void addDefaults() {
-            widgets.add(new Widget("clock", 0.06f, 0.18f, 0.38f, 0.28f));
-            widgets.add(new Widget("date", 0.52f, 0.18f, 0.34f, 0.22f));
-            widgets.add(new Widget("battery", 0.52f, 0.48f, 0.30f, 0.22f));
+            getWidgets().add(new Widget("clock", 0.06f, 0.18f, 0.38f, 0.28f));
+            getWidgets().add(new Widget("date", 0.52f, 0.18f, 0.34f, 0.22f));
+            getWidgets().add(new Widget("battery", 0.52f, 0.48f, 0.30f, 0.22f));
             Widget note = new Widget("note", 0.10f, 0.58f, 0.36f, 0.24f);
             note.label = "Your tablet dashboard";
-            widgets.add(note);
+            getWidgets().add(note);
         }
 
         private void save() {
             try {
-                JSONArray array = new JSONArray();
-                for (Widget widget : widgets) {
-                    JSONObject item = new JSONObject();
-                    item.put("type", widget.type);
-                    item.put("x", widget.x);
-                    item.put("y", widget.y);
-                    item.put("w", widget.w);
-                    item.put("h", widget.h);
-                    item.put("label", widget.label);
-                    item.put("startedAt", widget.startedAt);
-                    item.put("photoUri", widget.photoUri == null ? "" : widget.photoUri);
-                    array.put(item);
+                JSONArray pagesArray = new JSONArray();
+                for (List<Widget> page : pages) {
+                    JSONArray array = new JSONArray();
+                    for (Widget widget : page) {
+                        JSONObject item = new JSONObject();
+                        item.put("type", widget.type);
+                        item.put("x", widget.x);
+                        item.put("y", widget.y);
+                        item.put("w", widget.w);
+                        item.put("h", widget.h);
+                        item.put("label", widget.label);
+                        item.put("startedAt", widget.startedAt);
+                        item.put("photoUri", widget.photoUri == null ? "" : widget.photoUri);
+                        array.put(item);
+                    }
+                    pagesArray.put(array);
                 }
-                prefs.edit().putString("widgets", array.toString()).putInt("theme", theme).apply();
+                prefs.edit().putString("pages", pagesArray.toString()).putInt("theme", theme).apply();
             } catch (Exception ignored) {
             }
         }
 
         private void load() {
             theme = prefs.getInt("theme", 0);
-            String raw = prefs.getString("widgets", null);
+            String raw = prefs.getString("pages", null);
+            if (raw == null) {
+                // Backward compat
+                raw = prefs.getString("widgets", null);
+                if (raw != null) raw = "[" + raw + "]";
+            }
             if (raw == null) {
                 addDefaults();
                 return;
             }
             try {
-                JSONArray array = new JSONArray(raw);
-                for (int i = 0; i < array.length(); i++) {
-                    JSONObject item = array.getJSONObject(i);
-                    Widget widget = new Widget(
-                            item.optString("type", "clock"),
-                            (float) item.optDouble("x", 0.1),
-                            (float) item.optDouble("y", 0.1),
-                            (float) item.optDouble("w", 0.3),
-                            (float) item.optDouble("h", 0.22)
-                    );
-                    widget.label = item.optString("label", "");
-                    widget.startedAt = item.optLong("startedAt", System.currentTimeMillis());
-                    widget.photoUri = item.optString("photoUri", "");
-                    if ("weather".equals(widget.type)) { MainActivity.this.setupWeather(widget); }
-                    if ("calendar".equals(widget.type)) { MainActivity.this.setupCalendar(widget); }
-                    if ("photo".equals(widget.type)) { loadPhotoBitmap(widget); }
-                    widgets.add(widget);
+                JSONArray pagesArray = new JSONArray(raw);
+                for (int p = 0; p < pagesArray.length(); p++) {
+                    JSONArray array = pagesArray.getJSONArray(p);
+                    List<Widget> pageWidgets = new ArrayList<>();
+                    for (int i = 0; i < array.length(); i++) {
+                        JSONObject item = array.getJSONObject(i);
+                        Widget widget = new Widget(
+                                item.optString("type", "clock"),
+                                (float) item.optDouble("x", 0.1),
+                                (float) item.optDouble("y", 0.1),
+                                (float) item.optDouble("w", 0.3),
+                                (float) item.optDouble("h", 0.22)
+                        );
+                        widget.label = item.optString("label", "");
+                        widget.startedAt = item.optLong("startedAt", System.currentTimeMillis());
+                        widget.photoUri = item.optString("photoUri", "");
+                        if ("weather".equals(widget.type)) { MainActivity.this.setupWeather(widget); }
+                        if ("calendar".equals(widget.type)) { MainActivity.this.setupCalendar(widget); }
+                        if ("photo".equals(widget.type)) { loadPhotoBitmap(widget); }
+                        pageWidgets.add(widget);
+                    }
+                    pages.add(pageWidgets);
                 }
             } catch (Exception e) {
-                widgets.clear();
+                pages.clear();
                 addDefaults();
             }
         }
@@ -796,6 +958,7 @@ public class MainActivity extends Activity {
         String condition = "Unknown";
         String photoUri = "";
         Bitmap bitmap = null;
+        float tickerOffset = 0;
 
         Widget(String type, float x, float y, float w, float h) {
             this.type = type;
