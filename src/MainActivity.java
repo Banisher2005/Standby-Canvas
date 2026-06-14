@@ -528,45 +528,45 @@ public class MainActivity extends Activity {
             }
         }
 
-        private int getDominantColor(Bitmap bitmap) {
-            if (bitmap == null) return 0;
+        private Bitmap blurredBackground = null;
+        private Bitmap lastSource = null;
+
+        private void updateBlurredBackground(Bitmap source) {
+            if (source == null) { blurredBackground = null; lastSource = null; return; }
+            if (source == lastSource && blurredBackground != null) return;
             try {
-                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, 1, 1, true);
-                int color = scaled.getPixel(0, 0);
-                scaled.recycle();
-                return color;
-            } catch (Exception e) { return 0; }
+                int w = source.getWidth(); int h = source.getHeight();
+                int dw = 16; int dh = (int)(16f * h / w);
+                Bitmap tiny = Bitmap.createScaledBitmap(source, dw, dh, true);
+                blurredBackground = Bitmap.createScaledBitmap(tiny, getWidth(), getHeight(), true);
+                tiny.recycle();
+                lastSource = source;
+            } catch (Exception e) {}
         }
 
         private void drawBackground(Canvas canvas) {
-            int[][] palettes = {
-                    {0xFF101418, 0xFF22343C, 0xFF8ED7C6},
-                    {0xFF160F22, 0xFF3D233F, 0xFFFFC857},
-                    {0xFF09111F, 0xFF1F4E5F, 0xFFFF6B6B},
-                    {0xFF111111, 0xFF2E2E2E, 0xFFB7F000}
-            };
-            int[] p = palettes[theme];
-            paint.setShader(new LinearGradient(0, 0, getWidth(), getHeight(), p[0], p[1], Shader.TileMode.CLAMP));
-            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-            paint.setShader(null);
-            paint.setColor(p[2] & 0x22FFFFFF);
-            canvas.drawCircle(getWidth() * 0.78f, getHeight() * 0.28f, Math.min(getWidth(), getHeight()) * 0.28f, paint);
-            canvas.drawCircle(getWidth() * 0.18f, getHeight() * 0.78f, Math.min(getWidth(), getHeight()) * 0.20f, paint);
-            // Material You Dynamic Blend
-            int targetColor = 0;
-            if (MusicListenerService.albumArt != null) targetColor = getDominantColor(MusicListenerService.albumArt);
+            Bitmap bgSource = null;
+            if (MusicListenerService.albumArt != null) bgSource = MusicListenerService.albumArt;
             else if (!pages.isEmpty()) {
-                for (Widget w : pages.get(currentPage)) {
-                    if ("photo".equals(w.type) && w.bitmap != null) {
-                        targetColor = getDominantColor(w.bitmap); break;
-                    }
-                }
+                for (Widget w : pages.get(currentPage)) if ("photo".equals(w.type) && w.bitmap != null) { bgSource = w.bitmap; break; }
             }
-            if (targetColor != 0) {
-                paint.setColor(targetColor);
-                paint.setAlpha(60);
+            updateBlurredBackground(bgSource);
+
+            if (blurredBackground != null) {
+                canvas.drawBitmap(blurredBackground, 0, 0, paint);
+                paint.setColor(0xCC000000); // strong dark tint for glassmorphism
                 canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-                paint.setAlpha(255);
+            } else {
+                int[][] palettes = {
+                        {0xFF101418, 0xFF22343C, 0xFF8ED7C6},
+                        {0xFF160F22, 0xFF3D233F, 0xFFFFC857},
+                        {0xFF09111F, 0xFF1F4E5F, 0xFFFF6B6B},
+                        {0xFF111111, 0xFF2E2E2E, 0xFFB7F000}
+                };
+                int[] p = palettes[theme];
+                paint.setShader(new LinearGradient(0, 0, getWidth(), getHeight(), p[0], p[1], Shader.TileMode.CLAMP));
+                canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+                paint.setShader(null);
             }
             
             // Draw page indicators
@@ -582,143 +582,175 @@ public class MainActivity extends Activity {
 
         private void drawWidget(Canvas canvas, Widget widget) {
             RectF r = rect(widget);
-            paint.setColor(widget == active && editMode ? 0x55FFFFFF : 0x24FFFFFF);
-            canvas.drawRoundRect(r, dp(18), dp(18), paint);
+            paint.setColor(widget == active && editMode ? 0x77000000 : 0x55000000);
+            canvas.drawRoundRect(r, dp(24), dp(24), paint);
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(widget == active && editMode ? dp(3) : dp(1));
-            paint.setColor(widget == active && editMode ? 0xCCFFFFFF : 0x38FFFFFF);
-            canvas.drawRoundRect(r, dp(18), dp(18), paint);
+            paint.setStrokeWidth(widget == active && editMode ? dp(2) : dp(1));
+            paint.setColor(widget == active && editMode ? 0x88FFFFFF : 0x2AFFFFFF);
+            canvas.drawRoundRect(r, dp(24), dp(24), paint);
             paint.setStyle(Paint.Style.FILL);
 
             String primary = "";
             String secondary = "";
             Date now = new Date();
-            if ("clock".equals(widget.type)) {
-                primary = clockFormat.format(now);
-                secondary = "Standby Canvas";
-            } else if ("date".equals(widget.type)) {
-                primary = dateFormat.format(now);
-                secondary = "Today";
-            } else if ("battery".equals(widget.type)) {
-                primary = battery + "%";
-                secondary = charging ? "Charging" : "Battery";
-            } else if ("note".equals(widget.type)) {
-                primary = widget.label == null || widget.label.length() == 0 ? "Note" : widget.label;
-                secondary = "Custom text";
-            } else if ("timer".equals(widget.type)) {
-                long seconds = Math.max(0, (System.currentTimeMillis() - widget.startedAt) / 1000);
-                primary = String.format(Locale.US, "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60);
-                secondary = "Focus timer";
-            } else if ("weather".equals(widget.type)) {
-                primary = widget.temp;
-                secondary = widget.condition;
-            } else if ("music".equals(widget.type)) {
-                primary = MusicListenerService.currentTrack;
-                secondary = MusicListenerService.currentArtist;
-                
-                float btnY = r.bottom - dp(28);
-                paint.setColor(0xCCFFFFFF);
-                canvas.drawCircle(r.centerX(), btnY, dp(14), paint);
-                canvas.drawCircle(r.centerX() - dp(40), btnY, dp(10), paint);
-                canvas.drawCircle(r.centerX() + dp(40), btnY, dp(10), paint);
-                
-                textPaint.setTextSize(dp(10));
-                textPaint.setTextAlign(Paint.Align.CENTER);
-                canvas.drawText("||", r.centerX(), btnY + dp(3), textPaint);
-                canvas.drawText("<", r.centerX() - dp(40), btnY + dp(3), textPaint);
-                canvas.drawText(">", r.centerX() + dp(40), btnY + dp(3), textPaint);
-                textPaint.setTextAlign(Paint.Align.LEFT);
-            } else if ("calendar".equals(widget.type)) {
-                primary = "Upcoming";
-                secondary = widget.condition; // reused for events
-            } else if ("photo".equals(widget.type)) {
-                primary = "Tap to pick photo";
-                secondary = "";
-            } else if ("news".equals(widget.type)) {
-                primary = "Headlines";
-                secondary = widget.condition;
-                widget.tickerOffset -= 1.5f;
-                float textWidth = textPaint.measureText(secondary);
-                if (widget.tickerOffset < -textWidth) widget.tickerOffset = r.width();
-                
-                canvas.save();
-                canvas.clipRect(r.left + dp(10), r.top + dp(34), r.right - dp(10), r.bottom - dp(10));
-                canvas.drawText(secondary, r.left + dp(24) + widget.tickerOffset, r.top + dp(34) + textPaint.getTextSize(), textPaint);
-                canvas.restore();
-                
-                canvas.drawText(primary, r.left + dp(22), r.top + dp(24), textPaint);
-                return;
-            }
+            if ("clock".equals(widget.type)) { primary = clockFormat.format(now); secondary = "Standby Canvas"; }
+            else if ("date".equals(widget.type)) { primary = dateFormat.format(now); secondary = "Today"; }
+            else if ("battery".equals(widget.type)) { primary = battery + "%"; secondary = charging ? "Charging" : "Battery"; }
+            else if ("note".equals(widget.type)) { primary = widget.label == null || widget.label.length() == 0 ? "Note" : widget.label; secondary = ""; }
+            else if ("timer".equals(widget.type)) { long sec = Math.max(0, (System.currentTimeMillis() - widget.startedAt) / 1000); primary = String.format(Locale.US, "%02d:%02d:%02d", sec/3600, (sec/60)%60, sec%60); secondary = "Timer"; }
+            else if ("weather".equals(widget.type)) { primary = widget.temp; secondary = widget.condition; }
+            else if ("music".equals(widget.type)) { primary = MusicListenerService.currentTrack; secondary = MusicListenerService.currentArtist; }
+            else if ("calendar".equals(widget.type)) { primary = "Upcoming"; secondary = widget.condition; }
+            else if ("photo".equals(widget.type)) { primary = "Tap to pick photo"; secondary = ""; }
+            else if ("news".equals(widget.type)) { primary = "Headlines"; secondary = widget.condition; }
 
             if ("photo".equals(widget.type) && widget.bitmap != null) {
                 canvas.save();
-                android.graphics.Path clipPath = new android.graphics.Path();
-                clipPath.addRoundRect(r, dp(18), dp(18), android.graphics.Path.Direction.CW);
+                Path clipPath = new Path();
+                clipPath.addRoundRect(r, dp(24), dp(24), Path.Direction.CW);
                 canvas.clipPath(clipPath);
                 float scale = Math.max(r.width() / widget.bitmap.getWidth(), r.height() / widget.bitmap.getHeight());
                 Matrix m = new Matrix();
                 m.postScale(scale, scale);
-                m.postTranslate(r.left + (r.width() - widget.bitmap.getWidth() * scale) / 2f,
-                                r.top + (r.height() - widget.bitmap.getHeight() * scale) / 2f);
+                m.postTranslate(r.left + (r.width() - widget.bitmap.getWidth() * scale) / 2f, r.top + (r.height() - widget.bitmap.getHeight() * scale) / 2f);
                 canvas.drawBitmap(widget.bitmap, m, paint);
                 canvas.restore();
+            } else if ("news".equals(widget.type)) {
+                textPaint.setColor(Color.WHITE);
+                textPaint.setTextAlign(Paint.Align.LEFT);
+                textPaint.setTextSize(dp(22) * widget.textScale);
+                canvas.drawText(primary, r.left + dp(22), r.top + dp(32) * widget.textScale, textPaint);
                 
-                if (editMode) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(widget == active ? dp(3) : dp(1));
-                    paint.setColor(widget == active ? 0xCCFFFFFF : 0x38FFFFFF);
-                    canvas.drawRoundRect(r, dp(18), dp(18), paint);
-                    paint.setStyle(Paint.Style.FILL);
-                    paint.setColor(0xCCFFFFFF);
-                    canvas.drawCircle(r.right - dp(18), r.bottom - dp(18), dp(7), paint);
+                if (widget.layoutStyle == 0) { // Ticker
+                    widget.tickerOffset -= 1.5f;
+                    float textW = textPaint.measureText(secondary);
+                    if (widget.tickerOffset < -textW) widget.tickerOffset = r.width();
+                    canvas.save();
+                    canvas.clipRect(r.left + dp(10), r.top + dp(34), r.right - dp(10), r.bottom - dp(10));
+                    textPaint.setTextSize(dp(18) * widget.textScale);
+                    canvas.drawText(secondary, r.left + dp(24) + widget.tickerOffset, r.top + dp(40) + textPaint.getTextSize(), textPaint);
+                    canvas.restore();
+                } else { // List
+                    textPaint.setTextSize(dp(16) * widget.textScale);
+                    textPaint.setColor(0xEEFFFFFF);
+                    String[] news = secondary.split("   •   ");
+                    float yy = r.top + dp(48) * widget.textScale + dp(14);
+                    canvas.save();
+                    canvas.clipRect(r.left + dp(10), r.top + dp(34), r.right - dp(10), r.bottom - dp(10));
+                    for (String item : news) {
+                        if (item.trim().length() > 0) {
+                            canvas.drawText("• " + item, r.left + dp(20), yy, textPaint);
+                            yy += textPaint.getTextSize() * 1.5f;
+                        }
+                    }
+                    canvas.restore();
                 }
-                return;
-            }
-
-            float titleSize = Math.max(dp(24), Math.min(r.height() * 0.42f, r.width() / Math.max(3.2f, primary.length() * 0.55f)));
-            textPaint.setTextAlign(Paint.Align.LEFT);
-            
-            if ("calendar".equals(widget.type)) {
-                textPaint.setTextSize(dp(16));
+            } else if ("calendar".equals(widget.type)) {
+                textPaint.setTextAlign(Paint.Align.LEFT);
+                textPaint.setTextSize(dp(16) * widget.textScale);
                 textPaint.setColor(0xAAFFFFFF);
-                canvas.drawText(primary, r.left + dp(22), r.top + dp(32), textPaint);
-                
-                textPaint.setTextSize(dp(18));
+                canvas.drawText(primary, r.left + dp(22), r.top + dp(32) * widget.textScale, textPaint);
+                textPaint.setTextSize(dp(18) * widget.textScale);
                 textPaint.setColor(Color.WHITE);
                 if (secondary != null && secondary.contains("\n")) {
-                    String[] lines = secondary.split("\n");
-                    float yy = r.top + dp(62);
-                    for (String line : lines) {
-                        canvas.drawText(line, r.left + dp(22), yy, textPaint);
-                        yy += dp(26);
+                    String[] evs = secondary.split("\n");
+                    float yy = r.top + dp(42) * widget.textScale + dp(20);
+                    for (String ev : evs) {
+                        if (ev.trim().length() > 0) {
+                            canvas.drawCircle(r.left + dp(26), yy - dp(6) * widget.textScale, dp(3) * widget.textScale, textPaint);
+                            canvas.drawText(ev, r.left + dp(38), yy, textPaint);
+                            yy += dp(26) * widget.textScale;
+                        }
                     }
                 } else {
-                    canvas.drawText(secondary, r.left + dp(22), r.top + dp(62), textPaint);
+                    canvas.drawText(secondary, r.left + dp(22), r.top + dp(42) * widget.textScale + dp(20), textPaint);
                 }
-            } else {
+            } else if ("music".equals(widget.type)) {
+                float titleSize = Math.max(dp(20), Math.min(r.height() * 0.35f, r.width() / Math.max(4f, primary.length() * 0.5f))) * widget.textScale;
+                textPaint.setTextAlign(Paint.Align.LEFT);
                 textPaint.setColor(Color.WHITE);
                 textPaint.setTextSize(titleSize);
-                canvas.drawText(primary, r.left + dp(22), r.centerY() + titleSize * 0.20f, textPaint);
-                textPaint.setTextSize(Math.max(dp(13), titleSize * 0.22f));
+                
+                float textLeft = r.left + dp(22);
+                if (MusicListenerService.albumArt != null) {
+                    float artSize = dp(60) * widget.textScale;
+                    canvas.save();
+                    Path p = new Path();
+                    p.addRoundRect(new RectF(r.left + dp(20), r.top + dp(20), r.left + dp(20) + artSize, r.top + dp(20) + artSize), dp(8), dp(8), Path.Direction.CW);
+                    canvas.clipPath(p);
+                    canvas.drawBitmap(Bitmap.createScaledBitmap(MusicListenerService.albumArt, (int)artSize, (int)artSize, true), r.left + dp(20), r.top + dp(20), paint);
+                    canvas.restore();
+                    textLeft += artSize + dp(12);
+                }
+                
+                canvas.drawText(primary, textLeft, r.top + dp(38) * widget.textScale, textPaint);
+                textPaint.setTextSize(Math.max(dp(12), titleSize * 0.5f));
                 textPaint.setColor(0xCCFFFFFF);
-                if (secondary != null && secondary.contains("\n")) {
-                    String[] lines = secondary.split("\n");
-                    float yy = r.top + dp(34);
-                    for (String line : lines) {
-                        canvas.drawText(line, r.left + dp(24), yy, textPaint);
-                        yy += textPaint.getTextSize() * 1.5f;
-                    }
+                canvas.drawText(secondary, textLeft, r.top + dp(38) * widget.textScale + textPaint.getTextSize() * 1.5f, textPaint);
+                
+                float btnY = r.bottom - dp(28);
+                paint.setColor(0xEEFFFFFF);
+                
+                // Prev
+                Path prev = new Path();
+                float px = r.centerX() - dp(40);
+                prev.moveTo(px + dp(6), btnY - dp(6)); prev.lineTo(px - dp(4), btnY); prev.lineTo(px + dp(6), btnY + dp(6)); prev.close();
+                canvas.drawPath(prev, paint);
+                canvas.drawRect(px - dp(6), btnY - dp(5), px - dp(4), btnY + dp(5), paint);
+                
+                // Play/Pause
+                if (MusicListenerService.sessionToken != null) {
+                    canvas.drawCircle(r.centerX(), btnY, dp(16), paint);
+                    paint.setColor(0xFF121212);
+                    canvas.drawRect(r.centerX() - dp(4), btnY - dp(5), r.centerX() - dp(1), btnY + dp(5), paint);
+                    canvas.drawRect(r.centerX() + dp(1), btnY - dp(5), r.centerX() + dp(4), btnY + dp(5), paint);
+                }
+                
+                // Next
+                paint.setColor(0xEEFFFFFF);
+                Path next = new Path();
+                float nx = r.centerX() + dp(40);
+                next.moveTo(nx - dp(6), btnY - dp(6)); next.lineTo(nx + dp(4), btnY); next.lineTo(nx - dp(6), btnY + dp(6)); next.close();
+                canvas.drawPath(next, paint);
+                canvas.drawRect(nx + dp(4), btnY - dp(5), nx + dp(6), btnY + dp(5), paint);
+            } else {
+                if ("photo".equals(widget.type)) {
+                    textPaint.setTextAlign(Paint.Align.CENTER);
+                    textPaint.setTextSize(dp(18) * widget.textScale);
+                    textPaint.setColor(Color.WHITE);
+                    canvas.drawText(primary, r.centerX(), r.centerY(), textPaint);
                 } else {
-                    canvas.drawText(secondary, r.left + dp(24), r.top + dp(34), textPaint);
+                    float titleSize = Math.max(dp(24), Math.min(r.height() * 0.42f, r.width() / Math.max(3.2f, primary.length() * 0.55f))) * widget.textScale;
+                    textPaint.setTextAlign(Paint.Align.LEFT);
+                    textPaint.setColor(Color.WHITE);
+                    textPaint.setTextSize(titleSize);
+                    
+                    if ("clock".equals(widget.type)) {
+                        textPaint.setTextSize(titleSize * 1.3f);
+                        canvas.drawText(primary, r.left + dp(24), r.centerY() + titleSize * 0.4f, textPaint);
+                    } else {
+                        canvas.drawText(primary, r.left + dp(22), r.centerY() + titleSize * 0.20f, textPaint);
+                        textPaint.setTextSize(Math.max(dp(13), titleSize * 0.22f));
+                        textPaint.setColor(0xCCFFFFFF);
+                        if (secondary != null && secondary.contains("\n")) {
+                            String[] lines = secondary.split("\n");
+                            float yy = r.top + dp(34);
+                            for (String line : lines) {
+                                canvas.drawText(line, r.left + dp(24), yy, textPaint);
+                                yy += textPaint.getTextSize() * 1.5f;
+                            }
+                        } else if (secondary.length() > 0) {
+                            canvas.drawText(secondary, r.left + dp(24), r.top + dp(34), textPaint);
+                        }
+                    }
                 }
             }
 
-            if ("battery".equals(widget.type)) {
-                drawBattery(canvas, r);
-            }
-            if (editMode) {
+            if ("battery".equals(widget.type)) drawBattery(canvas, r);
+
+            if (editMode && widget == active) {
                 paint.setColor(0xCCFFFFFF);
-                canvas.drawCircle(r.right - dp(18), r.bottom - dp(18), dp(7), paint);
+                canvas.drawCircle(r.right - dp(24), r.bottom - dp(24), dp(8), paint);
             }
         }
 
@@ -816,57 +848,72 @@ public class MainActivity extends Activity {
         }
 
         private void showWidgetOptions(final Widget widget) {
-            if ("photo".equals(widget.type)) {
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Photo widget")
-                        .setItems(new String[]{"Delete widget", "Change photo"}, (dialog, which) -> {
-                            if (which == 0) { getWidgets().remove(widget); active = null; save(); invalidate(); }
-                            else { MainActivity.this.setupPhoto(widget); }
-                        }).show();
-                return;
-            }
+            LinearLayout layout = new LinearLayout(getContext());
+            layout.setOrientation(LinearLayout.VERTICAL);
+            layout.setPadding(dp(20), dp(20), dp(20), dp(20));
+
             if ("note".equals(widget.type)) {
-                final EditText input = new EditText(MainActivity.this);
-                input.setSingleLine(false);
-                input.setMinLines(2);
-                input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                final EditText input = new EditText(getContext());
                 input.setText(widget.label);
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Configure note")
-                        .setView(input)
-                        .setNegativeButton("Delete", new DialogInterface.OnClickListener() {
-                            @Override public void onClick(DialogInterface dialog, int which) {
-                                getWidgets().remove(widget);
-                                active = null;
-                                save();
-                                invalidate();
-                            }
-                        })
-                        .setPositiveButton("Save", new DialogInterface.OnClickListener() {
-                            @Override public void onClick(DialogInterface dialog, int which) {
-                                widget.label = input.getText().toString();
-                                save();
-                                invalidate();
-                            }
-                        })
-                        .show();
-            } else {
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle(cap(widget.type) + " widget")
-                        .setItems(new String[]{"Delete widget", "Restart timer"}, new DialogInterface.OnClickListener() {
-                            @Override public void onClick(DialogInterface dialog, int which) {
-                                if (which == 0) {
-                                    getWidgets().remove(widget);
-                                    active = null;
-                                } else if ("timer".equals(widget.type)) {
-                                    widget.startedAt = System.currentTimeMillis();
-                                }
-                                save();
-                                invalidate();
-                            }
-                        })
-                        .show();
+                layout.addView(input);
+                input.addTextChangedListener(new android.text.TextWatcher() {
+                    public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                    public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                    public void afterTextChanged(android.text.Editable s) { widget.label = s.toString(); invalidate(); save(); }
+                });
             }
+
+            android.widget.TextView scaleLabel = new android.widget.TextView(getContext());
+            scaleLabel.setText("Text Size Scaling");
+            scaleLabel.setPadding(0, dp(10), 0, dp(10));
+            layout.addView(scaleLabel);
+            
+            android.widget.SeekBar scaleBar = new android.widget.SeekBar(getContext());
+            scaleBar.setMax(20);
+            scaleBar.setProgress((int)(widget.textScale * 10f));
+            scaleBar.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+                public void onProgressChanged(android.widget.SeekBar sb, int p, boolean b) {
+                    widget.textScale = Math.max(0.4f, p / 10f);
+                    invalidate();
+                }
+                public void onStartTrackingTouch(android.widget.SeekBar sb) {}
+                public void onStopTrackingTouch(android.widget.SeekBar sb) { save(); }
+            });
+            layout.addView(scaleBar);
+
+            if ("news".equals(widget.type)) {
+                Button toggleBtn = new Button(getContext());
+                toggleBtn.setText("Style: " + (widget.layoutStyle == 0 ? "Ticker" : "List"));
+                toggleBtn.setOnClickListener(v -> {
+                    widget.layoutStyle = widget.layoutStyle == 0 ? 1 : 0;
+                    toggleBtn.setText("Style: " + (widget.layoutStyle == 0 ? "Ticker" : "List"));
+                    save(); invalidate();
+                });
+                layout.addView(toggleBtn);
+            }
+
+            if ("photo".equals(widget.type)) {
+                Button photoBtn = new Button(getContext());
+                photoBtn.setText("Change Photo");
+                photoBtn.setOnClickListener(v -> MainActivity.this.setupPhoto(widget));
+                layout.addView(photoBtn);
+            }
+            
+            if ("timer".equals(widget.type)) {
+                Button restartBtn = new Button(getContext());
+                restartBtn.setText("Restart Timer");
+                restartBtn.setOnClickListener(v -> { widget.startedAt = System.currentTimeMillis(); save(); invalidate(); });
+                layout.addView(restartBtn);
+            }
+
+            new AlertDialog.Builder(getContext())
+                    .setTitle(cap(widget.type) + " Settings")
+                    .setView(layout)
+                    .setPositiveButton("Close", null)
+                    .setNegativeButton("Delete Widget", (dialog, which) -> {
+                        getWidgets().remove(widget);
+                        active = null; save(); invalidate();
+                    }).show();
         }
 
         private Widget hit(float px, float py) {
@@ -911,6 +958,8 @@ public class MainActivity extends Activity {
                         item.put("label", widget.label);
                         item.put("startedAt", widget.startedAt);
                         item.put("photoUri", widget.photoUri == null ? "" : widget.photoUri);
+                        item.put("textScale", (double)widget.textScale);
+                        item.put("layoutStyle", widget.layoutStyle);
                         array.put(item);
                     }
                     pagesArray.put(array);
@@ -949,6 +998,8 @@ public class MainActivity extends Activity {
                         widget.label = item.optString("label", "");
                         widget.startedAt = item.optLong("startedAt", System.currentTimeMillis());
                         widget.photoUri = item.optString("photoUri", "");
+                        widget.textScale = (float)item.optDouble("textScale", 1.0);
+                        widget.layoutStyle = item.optInt("layoutStyle", 0);
                         if ("weather".equals(widget.type)) { MainActivity.this.setupWeather(widget); }
                         if ("calendar".equals(widget.type)) { MainActivity.this.setupCalendar(widget); }
                         if ("photo".equals(widget.type)) { loadPhotoBitmap(widget); }
@@ -985,6 +1036,8 @@ public class MainActivity extends Activity {
         String photoUri = "";
         Bitmap bitmap = null;
         float tickerOffset = 0;
+        float textScale = 1.0f;
+        int layoutStyle = 0;
 
         Widget(String type, float x, float y, float w, float h) {
             this.type = type;
