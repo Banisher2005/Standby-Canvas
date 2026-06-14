@@ -1,3 +1,5 @@
+package com.codex.standbycanvas;
+
 import android.app.Notification;
 import android.content.Intent;
 import android.service.notification.NotificationListenerService;
