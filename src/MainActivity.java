@@ -446,13 +446,13 @@ public class MainActivity extends Activity {
             ticker = new Runnable() {
                 @Override public void run() {
                     invalidate();
-                    boolean hasNews = false;
+                    boolean hasFastAnim = false;
                     if (!pages.isEmpty() && currentPage < pages.size()) {
                         for (Widget w : pages.get(currentPage)) {
-                            if ("news".equals(w.type)) hasNews = true;
+                            if ("news".equals(w.type) || "music".equals(w.type)) hasFastAnim = true;
                         }
                     }
-                    handler.postDelayed(this, hasNews ? 16 : 1000);
+                    handler.postDelayed(this, hasFastAnim ? 16 : 1000);
                 }
             };
             load();
@@ -665,7 +665,18 @@ public class MainActivity extends Activity {
                     for (String ev : evs) {
                         if (ev.trim().length() > 0) {
                             canvas.drawCircle(r.left + dp(26), yy - dp(6) * widget.textScale, dp(3) * widget.textScale, textPaint);
-                            canvas.drawText(ev, r.left + dp(38), yy, textPaint);
+                            String[] words = ev.split(" ");
+                            StringBuilder line = new StringBuilder();
+                            for (String word : words) {
+                                if (textPaint.measureText(line.toString() + word + " ") < r.width() - dp(50)) {
+                                    line.append(word).append(" ");
+                                } else {
+                                    canvas.drawText(line.toString(), r.left + dp(38), yy, textPaint);
+                                    yy += dp(22) * widget.textScale;
+                                    line = new StringBuilder(word).append(" ");
+                                }
+                            }
+                            canvas.drawText(line.toString(), r.left + dp(38), yy, textPaint);
                             yy += dp(26) * widget.textScale;
                         }
                     }
@@ -690,7 +701,21 @@ public class MainActivity extends Activity {
                     textLeft += artSize + dp(12);
                 }
                 
-                canvas.drawText(primary, textLeft, r.top + dp(38) * widget.textScale, textPaint);
+                float maxTextW = r.right - textLeft - dp(10);
+                float trackW = textPaint.measureText(primary);
+                if (trackW > maxTextW) {
+                    widget.tickerOffset -= 1.0f;
+                    String scrollText = primary + "   ...   ";
+                    float scrollW = textPaint.measureText(scrollText);
+                    if (widget.tickerOffset < -scrollW) widget.tickerOffset = maxTextW;
+                    canvas.save();
+                    canvas.clipRect(textLeft, r.top + dp(10), r.right - dp(10), r.bottom);
+                    canvas.drawText(scrollText, textLeft + widget.tickerOffset, r.top + dp(38) * widget.textScale, textPaint);
+                    canvas.restore();
+                } else {
+                    canvas.drawText(primary, textLeft, r.top + dp(38) * widget.textScale, textPaint);
+                    widget.tickerOffset = 0;
+                }
                 textPaint.setTextSize(Math.max(dp(12), titleSize * 0.5f));
                 textPaint.setColor(0xCCFFFFFF);
                 canvas.drawText(secondary, textLeft, r.top + dp(38) * widget.textScale + textPaint.getTextSize() * 1.5f, textPaint);
