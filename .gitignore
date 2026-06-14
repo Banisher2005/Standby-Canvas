@@ -1,0 +1,15 @@
+# Android
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+bin/
+gen/
+build/
+local.properties
+.DS_Store
+
+# Custom paths
+outputs/
+work/StandbyCanvas/build/

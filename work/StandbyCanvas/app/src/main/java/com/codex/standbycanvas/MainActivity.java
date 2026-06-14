@@ -1,0 +1,641 @@
+package com.codex.standbycanvas;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.os.BatteryManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.Toast;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationManager;
+import android.os.Build;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+
+public class MainActivity extends Activity {
+    private DashboardView dashboard;
+    private LinearLayout toolbar;
+    private Widget weatherWidgetPending;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
+        FrameLayout root = new FrameLayout(this);
+        dashboard = new DashboardView(this);
+        root.addView(dashboard, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setPadding(14, 10, 14, 10);
+        toolbar.setBackgroundColor(0x77000000);
+        toolbar.addView(makeButton("Edit", new View.OnClickListener() {
+            @Override public void onClick(View v) { toggleEdit(); }
+        }));
+        toolbar.addView(makeButton("Add", new View.OnClickListener() {
+            @Override public void onClick(View v) { showAddDialog(); }
+        }));
+        toolbar.addView(makeButton("Theme", new View.OnClickListener() {
+            @Override public void onClick(View v) { dashboard.nextTheme(); }
+        }));
+        toolbar.addView(makeButton("Reset", new View.OnClickListener() {
+            @Override public void onClick(View v) { confirmReset(); }
+        }));
+
+        FrameLayout.LayoutParams barParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL
+        );
+        barParams.topMargin = 16;
+        root.addView(toolbar, barParams);
+        setContentView(root);
+        enterImmersive();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        enterImmersive();
+    }
+
+    private Button makeButton(String label, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setBackgroundColor(0x55242A2E);
+        button.setOnClickListener(listener);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(88), dp(42));
+        params.leftMargin = dp(4);
+        params.rightMargin = dp(4);
+        button.setLayoutParams(params);
+        return button;
+    }
+
+    private void toggleEdit() {
+        dashboard.setEditMode(!dashboard.isEditMode());
+        toolbar.setAlpha(dashboard.isEditMode() ? 1f : 0.42f);
+        Toast.makeText(this, dashboard.isEditMode() ? "Edit mode: drag, resize, tap widget to configure" : "Locked dashboard", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showAddDialog() {
+        final String[] types = {"Clock", "Date", "Battery", "Note", "Timer", "Weather"};
+        new AlertDialog.Builder(this)
+                .setTitle("Add widget")
+                .setItems(types, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        dashboard.addWidget(types[which].toLowerCase(Locale.US));
+                    }
+                })
+                .show();
+    }
+
+    private void confirmReset() {
+        new AlertDialog.Builder(this)
+                .setTitle("Reset dashboard?")
+                .setMessage("This restores the starter layout.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Reset", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        dashboard.reset();
+                    }
+                })
+                .show();
+    }
+
+    public void setupWeather(Widget widget) {
+        weatherWidgetPending = widget;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, 101);
+                return;
+            }
+        }
+        fetchLocationAndWeather(widget);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == 101 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (weatherWidgetPending != null) fetchLocationAndWeather(weatherWidgetPending);
+        } else if (requestCode == 101) {
+            if (weatherWidgetPending != null) {
+                weatherWidgetPending.condition = "No permission";
+                if (dashboard != null) dashboard.invalidate();
+            }
+        }
+    }
+
+    private void fetchLocationAndWeather(final Widget widget) {
+        widget.condition = "Loading...";
+        if (dashboard != null) dashboard.invalidate();
+        LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        try {
+            Location loc = null;
+            if (lm != null) {
+                loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
+                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            }
+            if (loc != null) {
+                fetchWeatherFromApi(widget, loc.getLatitude(), loc.getLongitude());
+            } else {
+                widget.condition = "No location data";
+                if (dashboard != null) dashboard.invalidate();
+            }
+        } catch (SecurityException e) {
+            widget.condition = "Loc error";
+            if (dashboard != null) dashboard.invalidate();
+        }
+    }
+
+    private void fetchWeatherFromApi(final Widget widget, final double lat, final double lon) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    URL url = new URL("https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon + "&current_weather=true");
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setReadTimeout(5000);
+                    BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = in.readLine()) != null) response.append(line);
+                    in.close();
+                    JSONObject json = new JSONObject(response.toString());
+                    JSONObject current = json.getJSONObject("current_weather");
+                    final double temp = current.getDouble("temperature");
+                    final int code = current.getInt("weathercode");
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            widget.temp = temp + "°";
+                            widget.condition = getWeatherDesc(code);
+                            if (dashboard != null) dashboard.invalidate();
+                        }
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            widget.condition = "API Failed";
+                            if (dashboard != null) dashboard.invalidate();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private String getWeatherDesc(int code) {
+        if (code == 0) return "Clear";
+        if (code == 1 || code == 2 || code == 3) return "Partly Cloudy";
+        if (code >= 45 && code <= 48) return "Fog";
+        if (code >= 51 && code <= 67) return "Rain";
+        if (code >= 71 && code <= 77) return "Snow";
+        if (code >= 80 && code <= 82) return "Showers";
+        if (code >= 95) return "Thunderstorm";
+        return "Cloudy";
+    }
+
+    private void enterImmersive() {
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
+    }
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    public class DashboardView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Handler handler = new Handler(Looper.getMainLooper());
+        private final List<Widget> widgets = new ArrayList<>();
+        private final SimpleDateFormat clockFormat = new SimpleDateFormat("HH:mm", Locale.getDefault());
+        private final SimpleDateFormat dateFormat = new SimpleDateFormat("EEEE, MMM d", Locale.getDefault());
+        private final SharedPreferences prefs;
+        private final Runnable ticker;
+        private int theme = 0;
+        private int battery = 0;
+        private boolean charging = false;
+        private boolean editMode = true;
+        private Widget active;
+        private float lastX;
+        private float lastY;
+        private float startX;
+        private float startY;
+        private int touchMode;
+
+        private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+                int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                battery = scale > 0 ? Math.round(level * 100f / scale) : 0;
+                charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL;
+                invalidate();
+            }
+        };
+
+        public DashboardView(Context context) {
+            super(context);
+            setFocusable(true);
+            prefs = context.getSharedPreferences("standby_canvas", MODE_PRIVATE);
+            textPaint.setColor(Color.WHITE);
+            textPaint.setTypeface(android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL));
+            ticker = new Runnable() {
+                @Override public void run() {
+                    invalidate();
+                    handler.postDelayed(this, 1000);
+                }
+            };
+            load();
+            context.registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            handler.post(ticker);
+        }
+
+        public boolean isEditMode() { return editMode; }
+
+        public void setEditMode(boolean value) {
+            editMode = value;
+            active = null;
+            invalidate();
+        }
+
+        public void nextTheme() {
+            theme = (theme + 1) % 4;
+            save();
+            invalidate();
+        }
+
+        public void addWidget(String type) {
+            Widget widget = new Widget(type, 0.16f, 0.18f, 0.28f, 0.22f);
+            if ("clock".equals(type)) { widget.w = 0.34f; widget.h = 0.26f; }
+            if ("note".equals(type)) { widget.label = "Tap to edit"; widget.w = 0.32f; widget.h = 0.24f; }
+            if ("timer".equals(type)) { widget.startedAt = System.currentTimeMillis(); }
+            if ("weather".equals(type)) { MainActivity.this.setupWeather(widget); }
+            widget.x = 0.08f + (widgets.size() % 4) * 0.18f;
+            widget.y = 0.18f + (widgets.size() % 3) * 0.20f;
+            widgets.add(widget);
+            active = widget;
+            editMode = true;
+            save();
+            invalidate();
+        }
+
+        public void reset() {
+            widgets.clear();
+            addDefaults();
+            theme = 0;
+            editMode = true;
+            save();
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            drawBackground(canvas);
+            for (Widget widget : widgets) {
+                drawWidget(canvas, widget);
+            }
+            if (editMode) {
+                drawEditHint(canvas);
+            }
+        }
+
+        private void drawBackground(Canvas canvas) {
+            int[][] palettes = {
+                    {0xFF101418, 0xFF22343C, 0xFF8ED7C6},
+                    {0xFF160F22, 0xFF3D233F, 0xFFFFC857},
+                    {0xFF09111F, 0xFF1F4E5F, 0xFFFF6B6B},
+                    {0xFF111111, 0xFF2E2E2E, 0xFFB7F000}
+            };
+            int[] p = palettes[theme];
+            paint.setShader(new LinearGradient(0, 0, getWidth(), getHeight(), p[0], p[1], Shader.TileMode.CLAMP));
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            paint.setShader(null);
+            paint.setColor(p[2] & 0x22FFFFFF);
+            canvas.drawCircle(getWidth() * 0.78f, getHeight() * 0.28f, Math.min(getWidth(), getHeight()) * 0.28f, paint);
+            canvas.drawCircle(getWidth() * 0.18f, getHeight() * 0.78f, Math.min(getWidth(), getHeight()) * 0.20f, paint);
+        }
+
+        private void drawWidget(Canvas canvas, Widget widget) {
+            RectF r = rect(widget);
+            paint.setColor(widget == active && editMode ? 0x55FFFFFF : 0x24FFFFFF);
+            canvas.drawRoundRect(r, dp(18), dp(18), paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(widget == active && editMode ? dp(3) : dp(1));
+            paint.setColor(widget == active && editMode ? 0xCCFFFFFF : 0x38FFFFFF);
+            canvas.drawRoundRect(r, dp(18), dp(18), paint);
+            paint.setStyle(Paint.Style.FILL);
+
+            String primary = "";
+            String secondary = "";
+            Date now = new Date();
+            if ("clock".equals(widget.type)) {
+                primary = clockFormat.format(now);
+                secondary = "Standby Canvas";
+            } else if ("date".equals(widget.type)) {
+                primary = dateFormat.format(now);
+                secondary = "Today";
+            } else if ("battery".equals(widget.type)) {
+                primary = battery + "%";
+                secondary = charging ? "Charging" : "Battery";
+            } else if ("note".equals(widget.type)) {
+                primary = widget.label == null || widget.label.length() == 0 ? "Note" : widget.label;
+                secondary = "Custom text";
+            } else if ("timer".equals(widget.type)) {
+                long seconds = Math.max(0, (System.currentTimeMillis() - widget.startedAt) / 1000);
+                primary = String.format(Locale.US, "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60);
+                secondary = "Focus timer";
+            } else if ("weather".equals(widget.type)) {
+                primary = widget.temp;
+                secondary = widget.condition;
+            }
+
+            float titleSize = Math.max(dp(24), Math.min(r.height() * 0.42f, r.width() / Math.max(3.2f, primary.length() * 0.55f)));
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            textPaint.setColor(Color.WHITE);
+            textPaint.setTextSize(titleSize);
+            canvas.drawText(primary, r.left + dp(22), r.centerY() + titleSize * 0.20f, textPaint);
+            textPaint.setTextSize(Math.max(dp(13), titleSize * 0.22f));
+            textPaint.setColor(0xCCFFFFFF);
+            canvas.drawText(secondary, r.left + dp(24), r.top + dp(34), textPaint);
+
+            if ("battery".equals(widget.type)) {
+                drawBattery(canvas, r);
+            }
+            if (editMode) {
+                paint.setColor(0xCCFFFFFF);
+                canvas.drawCircle(r.right - dp(18), r.bottom - dp(18), dp(7), paint);
+            }
+        }
+
+        private void drawBattery(Canvas canvas, RectF r) {
+            float left = r.left + dp(24);
+            float top = r.bottom - dp(42);
+            float width = Math.min(r.width() - dp(60), dp(190));
+            RectF body = new RectF(left, top, left + width, top + dp(18));
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(0xDDFFFFFF);
+            canvas.drawRoundRect(body, dp(5), dp(5), paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(charging ? 0xFF8ED7C6 : 0xFFFFC857);
+            canvas.drawRoundRect(new RectF(body.left + dp(3), body.top + dp(3), body.left + dp(3) + (body.width() - dp(6)) * battery / 100f, body.bottom - dp(3)), dp(3), dp(3), paint);
+            canvas.drawRoundRect(new RectF(body.right + dp(3), body.top + dp(5), body.right + dp(10), body.bottom - dp(5)), dp(2), dp(2), paint);
+        }
+
+        private void drawEditHint(Canvas canvas) {
+            textPaint.setTextAlign(Paint.Align.RIGHT);
+            textPaint.setColor(0xAAFFFFFF);
+            textPaint.setTextSize(dp(14));
+            canvas.drawText("Tap a widget to edit text/delete, drag to move, corner to resize", getWidth() - dp(18), getHeight() - dp(18), textPaint);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (!editMode) return true;
+            float x = event.getX();
+            float y = event.getY();
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    active = hit(x, y);
+                    lastX = x;
+                    lastY = y;
+                    startX = x;
+                    startY = y;
+                    touchMode = active != null && isOnResizeHandle(active, x, y) ? 2 : 1;
+                    invalidate();
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (active != null) {
+                        float dx = (x - lastX) / Math.max(1, getWidth());
+                        float dy = (y - lastY) / Math.max(1, getHeight());
+                        if (touchMode == 2) {
+                            active.w = clamp(active.w + dx, 0.16f, 0.82f);
+                            active.h = clamp(active.h + dy, 0.14f, 0.72f);
+                        } else {
+                            active.x = clamp(active.x + dx, 0f, 1f - active.w);
+                            active.y = clamp(active.y + dy, 0f, 1f - active.h);
+                        }
+                        lastX = x;
+                        lastY = y;
+                        save();
+                        invalidate();
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    if (active != null && Math.abs(x - startX) < dp(4) && Math.abs(y - startY) < dp(4)) {
+                        showWidgetOptions(active);
+                    }
+                    touchMode = 0;
+                    return true;
+            }
+            return true;
+        }
+
+        private void showWidgetOptions(final Widget widget) {
+            if ("note".equals(widget.type)) {
+                final EditText input = new EditText(MainActivity.this);
+                input.setSingleLine(false);
+                input.setMinLines(2);
+                input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                input.setText(widget.label);
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Configure note")
+                        .setView(input)
+                        .setNegativeButton("Delete", new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                widgets.remove(widget);
+                                active = null;
+                                save();
+                                invalidate();
+                            }
+                        })
+                        .setPositiveButton("Save", new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                widget.label = input.getText().toString();
+                                save();
+                                invalidate();
+                            }
+                        })
+                        .show();
+            } else {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(cap(widget.type) + " widget")
+                        .setItems(new String[]{"Delete widget", "Restart timer"}, new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                if (which == 0) {
+                                    widgets.remove(widget);
+                                    active = null;
+                                } else if ("timer".equals(widget.type)) {
+                                    widget.startedAt = System.currentTimeMillis();
+                                }
+                                save();
+                                invalidate();
+                            }
+                        })
+                        .show();
+            }
+        }
+
+        private Widget hit(float px, float py) {
+            for (int i = widgets.size() - 1; i >= 0; i--) {
+                Widget widget = widgets.get(i);
+                if (rect(widget).contains(px, py)) return widget;
+            }
+            return null;
+        }
+
+        private boolean isOnResizeHandle(Widget widget, float px, float py) {
+            RectF r = rect(widget);
+            return px > r.right - dp(52) && py > r.bottom - dp(52);
+        }
+
+        private RectF rect(Widget widget) {
+            return new RectF(widget.x * getWidth(), widget.y * getHeight(),
+                    (widget.x + widget.w) * getWidth(), (widget.y + widget.h) * getHeight());
+        }
+
+        private void addDefaults() {
+            widgets.add(new Widget("clock", 0.06f, 0.18f, 0.38f, 0.28f));
+            widgets.add(new Widget("date", 0.52f, 0.18f, 0.34f, 0.22f));
+            widgets.add(new Widget("battery", 0.52f, 0.48f, 0.30f, 0.22f));
+            Widget note = new Widget("note", 0.10f, 0.58f, 0.36f, 0.24f);
+            note.label = "Your tablet dashboard";
+            widgets.add(note);
+        }
+
+        private void save() {
+            try {
+                JSONArray array = new JSONArray();
+                for (Widget widget : widgets) {
+                    JSONObject item = new JSONObject();
+                    item.put("type", widget.type);
+                    item.put("x", widget.x);
+                    item.put("y", widget.y);
+                    item.put("w", widget.w);
+                    item.put("h", widget.h);
+                    item.put("label", widget.label);
+                    item.put("startedAt", widget.startedAt);
+                    array.put(item);
+                }
+                prefs.edit().putString("widgets", array.toString()).putInt("theme", theme).apply();
+            } catch (Exception ignored) {
+            }
+        }
+
+        private void load() {
+            theme = prefs.getInt("theme", 0);
+            String raw = prefs.getString("widgets", null);
+            if (raw == null) {
+                addDefaults();
+                return;
+            }
+            try {
+                JSONArray array = new JSONArray(raw);
+                for (int i = 0; i < array.length(); i++) {
+                    JSONObject item = array.getJSONObject(i);
+                    Widget widget = new Widget(
+                            item.optString("type", "clock"),
+                            (float) item.optDouble("x", 0.1),
+                            (float) item.optDouble("y", 0.1),
+                            (float) item.optDouble("w", 0.3),
+                            (float) item.optDouble("h", 0.22)
+                    );
+                    widget.label = item.optString("label", "");
+                    widget.startedAt = item.optLong("startedAt", System.currentTimeMillis());
+                    if ("weather".equals(widget.type)) { MainActivity.this.setupWeather(widget); }
+                    widgets.add(widget);
+                }
+            } catch (Exception e) {
+                widgets.clear();
+                addDefaults();
+            }
+        }
+
+        private float clamp(float value, float min, float max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        private String cap(String value) {
+            if (value == null || value.length() == 0) return "Widget";
+            return value.substring(0, 1).toUpperCase(Locale.US) + value.substring(1);
+        }
+    }
+
+    private static class Widget {
+        String type;
+        String label = "";
+        float x;
+        float y;
+        float w;
+        float h;
+        long startedAt = System.currentTimeMillis();
+        String temp = "--°";
+        String condition = "Unknown";
+
+        Widget(String type, float x, float y, float w, float h) {
+            this.type = type;
+            this.x = x;
+            this.y = y;
+            this.w = w;
+            this.h = h;
+        }
+    }
+}
